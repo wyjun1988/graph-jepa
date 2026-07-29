@@ -32,6 +32,7 @@ NODE_EVAL = ROOT / "reports" / "walk_forward" / "node_eval"
 FOLDS = {
     "r5": "fold1_20250905_to_20260710",
     "r4": "fold1_20241106_to_20250908",
+    "r3": "fold1_20240104_to_20241107",
 }
 HORIZON = 10          # 챔프의 보유기간; entry_path IC 도 이 지평에서 채점된다
 TOP_N = 100           # 유동성 상위 N — 공식 지표와 동일
