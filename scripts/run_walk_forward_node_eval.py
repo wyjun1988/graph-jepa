@@ -218,6 +218,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-device", default="cuda")
     parser.add_argument("--max-steps", type=int, default=0)
     parser.add_argument("--seed", type=int, default=17)
+    parser.add_argument(
+        "--save-return-forecasts",
+        action="store_true",
+        help="write per-ticker per-day forecasts so runs can be pooled afterwards",
+    )
     parser.add_argument("--checkpoint-epochs", default="")
     parser.add_argument("--event-path", action="append", default=[])
     parser.add_argument(
@@ -556,6 +561,8 @@ def main() -> None:
             "--device", args.eval_device,
             "--seed", str(args.seed),
         ]
+        if args.save_return_forecasts:
+            eval_cmd.append("--save-return-forecasts")
         for event_path in args.event_path:
             eval_cmd.extend(["--event-path", event_path])
         for fundamental_path in args.fundamental_path:
