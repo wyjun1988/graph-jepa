@@ -145,14 +145,22 @@ def stats(daily):
     return m, sd, (m / sd if sd > 0 else float("nan"))
 
 
-def reported_ic(name, suffix):
-    """그 런의 future_rollout.csv 가 보고한 top100 IC (재채점 검증용 참고치)."""
+def reported_ic(name, suffix, horizon=HORIZON):
+    """future_rollout.csv 가 보고한 top100 IC — 지평을 지정해 뽑는다.
+
+    주의: 이 파일은 (날짜 x 지평) 행을 담고 있어서 통째로 평균하면 지평
+    1/2/3/5/10 이 섞인 값이 나온다. 지금까지 실험 간 비교에 쓰인 수치가 그
+    혼합 평균이었다. 10일 보유 전략의 성패와 직결되는 건 지평 10 이므로
+    여기서는 지평을 명시해 뽑는다.
+    """
     path = NODE_EVAL / f"{name}_{suffix}" / "future_rollout.csv"
     if not path.exists():
         return float("nan")
     vals = []
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
+            if horizon is not None and int(row["horizon"]) != horizon:
+                continue
             v = row.get("realized_entry_path_ic_top100")
             if v not in (None, "", "nan"):
                 vals.append(float(v))
@@ -183,7 +191,7 @@ def main():
     print(f"[폴드 {args.fold}]  시드 {seeds}  공통 거래일 {len(universe)}일\n")
 
     # ── 단일 시드: 재채점이 공식 보고값을 따라가는지 확인
-    print(f"{'시드':>6} {'재채점 IC':>11} {'보고 IC':>11} {'차이':>9}")
+    print(f"{'시드':>6} {'재채점 IC':>11} {'보고 IC':>11} {'차이':>9}   (둘 다 지평 10)")
     print("-" * 40)
     for s in seeds:
         preds = subset_predictions(loaded, [s], universe)

@@ -8,7 +8,12 @@
 
 수익 정의는 평가 파이프라인과 동일한 '진입경로':
     D+h 수익 = Close[t+h] / Open[t+1] - 1        (t = 신호일)
-수익은 시장중립 기준이다 — 진입과 동시에 같은 금액 KQ11 숏(β=1, 프로덕션과 동일).
+수익은 기본적으로 **당일 유니버스 평균 대비 초과분**(횡단면 중심화)이다.
+KQ11 숏(--hedge index)도 고를 수 있으나 권장하지 않는다: 이 유니버스(KRX500 유동성
+상위)를 코스닥 지수로 헤지하면 구조적 잔차가 크게 남는다. 실측(폴드 r5)으로 상위
+100종목을 그냥 동일가중 보유만 해도 KQ11 헤지 후 +37%/년(Sharpe 1.66)이 나왔다 —
+선택과 무관한 이 드리프트가 총수익을 부풀리면 회전비용의 상대적 타격이 과소평가돼
+청산 비교가 왜곡된다. 유니버스 중심화는 그 드리프트를 제거하고 순수 선택효과만 남긴다.
 비용은 왕복 고정 bp 로 단순화했다(매수 13bp + 매도 28bp = 41bp 가 현행 가정).
 사다리의 레그별 스프레드 악화(§8-9~8-12)는 여기 반영돼 있지 않으므로, 사다리에
 유리한 쪽으로 치우친 비교다 — 그런데도 사다리가 지면 결론은 더 강해진다.
@@ -133,7 +138,7 @@ def select(by_date, date, top_k=TOP_K):
     return sorted(liquid, key=lambda t: rows[t][0], reverse=True)[:top_k]
 
 
-def policy_returns(panel, index_rec, picks_by_date):
+def policy_returns(panel, benchmark, picks_by_date):
     """{정책: {날짜: 비용전 수익}}
 
     D+20 은 미래 20거래일이 있어야 하므로 기간 끝에서 결측이 난다. 정책마다 날짜
@@ -146,9 +151,10 @@ def policy_returns(panel, index_rec, picks_by_date):
     for date, picks in picks_by_date.items():
         if not picks:
             continue
-        idx = {h: path_return(index_rec, date, h) for h in horizons}
-        if any(v is None for v in idx.values()):
-            continue                       # 지수 다리가 없으면 헤지 수익 계산 불가
+        bench = benchmark(date, horizons)
+        if bench is None:
+            continue
+        idx = bench
         rows = []
         for t in picks:
             rs = {h: entry_path_return(panel, t, date, h) for h in horizons}
@@ -159,13 +165,39 @@ def policy_returns(panel, index_rec, picks_by_date):
         if len(rows) != len(picks):
             continue
         n = len(rows)
-        # 시장중립: 진입과 동시에 같은 금액만큼 지수 숏(β=1) — 프로덕션과 동일
+        # 시장중립: 기준선(유니버스 평균 또는 지수) 대비 초과수익
         out["사다리(1,2,3,5,10)"][date] = sum(
             sum(r[h] - idx[h] for h in LADDER) / len(LADDER) for r in rows
         ) / n                              # 각 레그 20% 균등
         out["단일 D+10"][date] = sum(r[10] - idx[10] for r in rows) / n
         out["단일 D+20"][date] = sum(r[20] - idx[20] for r in rows) / n
     return out
+
+
+def make_benchmark(mode, panel, index_rec, universe_by_date):
+    """{date -> {horizon -> 기준수익}} 를 주는 함수. None 이면 그 날은 제외."""
+    cache = {}
+
+    def bench(date, horizons):
+        if date in cache:
+            return cache[date]
+        if mode == "index":
+            vals = {h: path_return(index_rec, date, h) for h in horizons}
+            out = None if any(v is None for v in vals.values()) else vals
+        else:
+            tickers = universe_by_date.get(date, [])
+            out = {}
+            for h in horizons:
+                rs = [entry_path_return(panel, t, date, h) for t in tickers]
+                rs = [r for r in rs if r is not None]
+                if len(rs) < 30:           # 표본이 얇으면 기준선이 불안정
+                    out = None
+                    break
+                out[h] = sum(rs) / len(rs)
+        cache[date] = out
+        return out
+
+    return bench
 
 
 def annualized(daily, hold_days, cost_bp):
@@ -193,8 +225,13 @@ def main():
     ap.add_argument("--seeds", nargs="+", type=int, required=True)
     ap.add_argument("--prefix", default="ens_s")
     ap.add_argument("--fold", default="r5", choices=sorted(FOLDS))
+    ap.add_argument("--top-k", type=int, default=TOP_K,
+                    help="편입 종목수 — 결론이 선별폭에 의존하는지 확인용")
+    ap.add_argument("--hedge", default="universe", choices=["universe", "index"],
+                    help="기준선: universe=당일 유니버스 평균(권장), index=KQ11 숏")
     args = ap.parse_args()
     suffix = FOLDS[args.fold]
+    top_k = args.top_k
 
     loaded = {}
     for s in args.seeds:
@@ -225,11 +262,20 @@ def main():
             for t in tickers
         }
 
-    variants = {f"seed {s}": {d: select(loaded[s], d) for d in dates} for s in seeds}
-    variants["앙상블"] = {d: select(ens_by_date, d) for d in dates}
+    universe_by_date = {}
+    for date in dates:
+        rows = loaded[seeds[0]][date]
+        universe_by_date[date] = sorted(
+            rows, key=lambda t: rows[t][1], reverse=True
+        )[:TOP_N]
+    bench = make_benchmark(args.hedge, panel, index_rec, universe_by_date)
 
-    print(f"[폴드 {args.fold}] 공통 거래일 {len(dates)}일, 편입 {TOP_K}종목")
-    print("수익=시장중립(KQ11 β=1 숏), 비용은 연 회전수 환산\n")
+    variants = {f"seed {s}": {d: select(loaded[s], d, top_k) for d in dates} for s in seeds}
+    variants["앙상블"] = {d: select(ens_by_date, d, top_k) for d in dates}
+
+    print(f"[폴드 {args.fold}] 공통 거래일 {len(dates)}일, 편입 {top_k}종목")
+    label = "유니버스 평균 대비" if args.hedge == "universe" else "KQ11 β=1 숏"
+    print(f"수익={label}, 비용은 연 회전수 환산\n")
     header = (f"{'변형':>10} {'청산':>20} {'보유일':>6} {'연회전':>6} {'연수익%':>8}"
               + "".join(f"{'Sh' + str(c):>7}" for c in COST_GRID))
     print(header)
@@ -237,7 +283,7 @@ def main():
 
     summary = {}
     for label, picks_by_date in variants.items():
-        pol = policy_returns(panel, index_rec, picks_by_date)
+        pol = policy_returns(panel, bench, picks_by_date)
         for policy, daily in pol.items():
             if not daily:
                 continue
