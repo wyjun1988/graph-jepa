@@ -37,6 +37,16 @@ TOP_N = 100           # 유동성 상위 N
 TOP_K = 5             # 편입 종목수
 LADDER = (1, 2, 3, 5, 10)
 COST_GRID = (26, 41, 72)   # docs §8-18 과 동일한 왕복 bp 격자
+TRADING_DAYS = 252
+
+# 정책별 자본의 평균 보유일 → 연 회전수(252/보유일). docs §8-9 의 핵심:
+# 사다리는 주당 평균 4.2일만 들고 있어 연 60회전, 단일 D+20 은 12.6회전이다.
+# 거래당 같은 bp 를 물려도 연간 비용은 4.6배 차이가 난다.
+POLICY_HOLD = {
+    "사다리(1,2,3,5,10)": sum(LADDER) / len(LADDER),   # 4.2
+    "단일 D+10": 10.0,
+    "단일 D+20": 20.0,
+}
 
 
 def load_prices():
@@ -158,13 +168,24 @@ def policy_returns(panel, index_rec, picks_by_date):
     return out
 
 
-def sharpe(daily, cost_bp):
-    vals = [v - cost_bp / 10000.0 for _, v in sorted(daily.items())]
+def annualized(daily, hold_days, cost_bp):
+    """회전율로 환산한 연 수익·연 변동성·Sharpe.
+
+    매일 새 코호트가 들어가는 정상상태에서 평균 투입자본은 (코호트 x 평균보유일)
+    이므로, 자본 기준 연 회전수는 252/보유일이다. 비용은 회전마다 물고, 수익도
+    같은 배수로 늘어난다. 변동성은 사이클이 독립이라 보고 sqrt(회전수)로 키운다.
+    사다리를 거래당 비용으로만 재면 회전수 4.6배 차이가 통째로 빠진다 (docs §8-9).
+    """
+    vals = [v for _, v in sorted(daily.items())]
     if len(vals) < 2:
-        return float("nan"), float("nan")
+        return float("nan"), float("nan"), float("nan")
     m = sum(vals) / len(vals)
     sd = (sum((v - m) ** 2 for v in vals) / (len(vals) - 1)) ** 0.5
-    return m, (m / sd if sd > 0 else float("nan"))
+    turns = TRADING_DAYS / hold_days
+    net = (m - cost_bp / 10000.0) * turns
+    vol = sd * math.sqrt(turns)
+    return net, vol, (net / vol if vol > 0 else float("nan"))
+
 
 
 def main():
@@ -207,10 +228,10 @@ def main():
     variants = {f"seed {s}": {d: select(loaded[s], d) for d in dates} for s in seeds}
     variants["앙상블"] = {d: select(ens_by_date, d) for d in dates}
 
-    print(f"[폴드 {args.fold}] 공통 거래일 {len(dates)}일, 편입 {TOP_K}종목\n")
-    header = f"{'변형':>10} {'청산':>20} {'평균%':>8}" + "".join(
-        f"{'Sh' + str(c):>7}" for c in COST_GRID
-    )
+    print(f"[폴드 {args.fold}] 공통 거래일 {len(dates)}일, 편입 {TOP_K}종목")
+    print("수익=시장중립(KQ11 β=1 숏), 비용은 연 회전수 환산\n")
+    header = (f"{'변형':>10} {'청산':>20} {'보유일':>6} {'연회전':>6} {'연수익%':>8}"
+              + "".join(f"{'Sh' + str(c):>7}" for c in COST_GRID))
     print(header)
     print("-" * len(header))
 
@@ -220,10 +241,13 @@ def main():
         for policy, daily in pol.items():
             if not daily:
                 continue
-            m, _ = sharpe(daily, 0)
-            row = f"{label:>10} {policy:>20} {m*100:>+8.3f}"
+            hold = POLICY_HOLD[policy]
+            turns = TRADING_DAYS / hold
+            gross, _, _ = annualized(daily, hold, 0)
+            row = (f"{label:>10} {policy:>20} {hold:>6.1f} {turns:>6.1f}"
+                   f" {gross*100:>+8.1f}")
             for c in COST_GRID:
-                _, sh = sharpe(daily, c)
+                _, _, sh = annualized(daily, hold, c)
                 row += f"{sh:>7.2f}"
             print(row)
             summary.setdefault(policy, {})[label] = daily
@@ -237,7 +261,7 @@ def main():
         for policy in summary:
             daily = summary[policy].get(label)
             if daily:
-                _, sh = sharpe(daily, 41)
+                _, _, sh = annualized(daily, POLICY_HOLD[policy], 41)
                 row += f"{sh:>22.2f}"
             else:
                 row += f"{'—':>22}"
@@ -250,8 +274,8 @@ def main():
         total = 0
         for label in variants:
             if label in lad and label in d20:
-                _, a = sharpe(lad[label], 41)
-                _, b = sharpe(d20[label], 41)
+                _, _, a = annualized(lad[label], POLICY_HOLD["사다리(1,2,3,5,10)"], 41)
+                _, _, b = annualized(d20[label], POLICY_HOLD["단일 D+20"], 41)
                 if math.isfinite(a) and math.isfinite(b):
                     total += 1
                     wins += 1 if b > a else 0
