@@ -179,8 +179,10 @@ def make_benchmark(mode, panel, index_rec, universe_by_date):
     cache = {}
 
     def bench(date, horizons):
-        if date in cache:
-            return cache[date]
+        # 지평 집합마다 결과가 다르므로 캐시 키에 반드시 포함해야 한다
+        key = (date, tuple(horizons))
+        if key in cache:
+            return cache[key]
         if mode == "index":
             vals = {h: path_return(index_rec, date, h) for h in horizons}
             out = None if any(v is None for v in vals.values()) else vals
@@ -194,7 +196,7 @@ def make_benchmark(mode, panel, index_rec, universe_by_date):
                     out = None
                     break
                 out[h] = sum(rs) / len(rs)
-        cache[date] = out
+        cache[key] = out
         return out
 
     return bench
@@ -240,6 +242,52 @@ def annualized(daily, hold_days, cost_bp):
 
 
 
+def run_sweep(panel, benchmark, variants, horizons):
+    """단일 청산 보유기간 훑기 — 어디서 최적이 되는가.
+
+    긴 지평일수록 미래 데이터가 더 필요해 표본이 줄어든다. 지평별로 다른 날짜를
+    쓰면 비교가 무의미하므로 **가장 긴 지평까지 갖춰진 날만** 전 지평 공통으로 쓴다.
+    """
+    print(f"\n── 단일 청산 보유기간 훑기 (모든 지평 공통 날짜) ──")
+    for label, picks_by_date in variants.items():
+        rows = {}
+        for date, picks in picks_by_date.items():
+            if not picks:
+                continue
+            bench_r = benchmark(date, horizons)
+            if bench_r is None:
+                continue
+            per = {}
+            ok = True
+            for h in horizons:
+                vals = [entry_path_return(panel, t, date, h) for t in picks]
+                if any(v is None for v in vals):
+                    ok = False
+                    break
+                per[h] = sum(v - bench_r[h] for v in vals) / len(vals)
+            if ok:
+                rows[date] = per
+        if not rows:
+            continue
+        n = len(rows)
+        print(f"\n  [{label}]  공통 {n}일")
+        print(f"  {'보유일':>6} {'연회전':>6} {'연수익%':>9}" +
+              "".join(f"{'Sh' + str(c):>7}" for c in COST_GRID))
+        best = None
+        for h in horizons:
+            daily = {d: rows[d][h] for d in rows}
+            gross, _, _ = annualized(daily, h, 0)
+            line = f"  {h:>6} {TRADING_DAYS/h:>6.1f} {gross*100:>+9.1f}"
+            for c in COST_GRID:
+                _, _, sh = annualized(daily, h, c)
+                line += f"{sh:>7.2f}"
+                if c == 41 and (best is None or sh > best[1]):
+                    best = (h, sh)
+            print(line)
+        if best:
+            print(f"  → 41bp 기준 최적 보유기간: D+{best[0]} (Sharpe {best[1]:.2f})")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds", nargs="+", type=int, required=True)
@@ -249,6 +297,9 @@ def main():
                     help="편입 종목수 — 결론이 선별폭에 의존하는지 확인용")
     ap.add_argument("--hedge", default="universe", choices=["universe", "index"],
                     help="기준선: universe=당일 유니버스 평균(권장), index=KQ11 숏")
+    ap.add_argument("--sweep", nargs="*", type=int, default=None,
+                    help="단일 청산 보유기간 훑기 (예: --sweep 5 10 15 20 30 40). "
+                         "최적 보유기간을 찾는다. 모든 지평이 갖춰진 날만 사용.")
     args = ap.parse_args()
     suffix = FOLDS[args.fold]
     top_k = args.top_k
@@ -375,6 +426,10 @@ def main():
                     t = newey_west_t(diffs, lag=20)
                     row += f"{m*100:>+12.1f}%{t:>6.2f}"
                 print(row)
+
+    if args.sweep is not None:
+        hs = sorted(set(args.sweep)) or [5, 10, 15, 20, 30, 40]
+        run_sweep(panel, bench, variants, hs)
 
     print("\n비용은 회전당 왕복 고정 bp — 사다리의 레그별 스프레드 악화(§8-9~8-12) 미반영")
     print("Sharpe 는 사이클 독립 가정(sqrt(회전수)) — 겹치는 코호트 때문에 낙관 쪽 편향")

@@ -23,6 +23,10 @@ mkdir -p reports
   echo ""
   echo "########## 3. 청산 정책 (편입 20종목 — 선별폭 의존성 확인) ##########"
   "$PY" scripts/exit_policy_report.py --seeds $SEEDS --fold "$FOLD" --top-k 20 2>&1
+  echo ""
+  echo "########## 4. 보유기간 훑기 (최적 청산일) ##########"
+  "$PY" scripts/exit_policy_report.py --seeds $SEEDS --fold "$FOLD" --top-k 20 \
+      --sweep 3 5 10 15 20 30 40 2>&1 | sed -n "/보유기간 훑기/,$p"
 } | tee "$OUT"
 
 echo ""
