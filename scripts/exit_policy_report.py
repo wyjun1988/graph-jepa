@@ -200,6 +200,26 @@ def make_benchmark(mode, panel, index_rec, universe_by_date):
     return bench
 
 
+def newey_west_t(diffs, lag):
+    """겹치는 보유기간이 만드는 자기상관을 보정한 t (평균=0 검정)."""
+    n = len(diffs)
+    if n < lag + 2:
+        return float("nan")
+    mean = sum(diffs) / n
+    dev = [d - mean for d in diffs]
+    var = sum(x * x for x in dev) / n
+    for k in range(1, lag + 1):
+        cov = sum(dev[t] * dev[t - k] for t in range(k, n)) / n
+        var += 2.0 * (1.0 - k / (lag + 1.0)) * cov
+    return mean / math.sqrt(var / n) if var > 0 else float("nan")
+
+
+def annual_series(daily, hold_days, cost_bp):
+    """날짜별 '연환산 순수익 기여' — 정책 간 짝지은 비교를 같은 단위로 만든다."""
+    turns = TRADING_DAYS / hold_days
+    return {d: (v - cost_bp / 10000.0) * turns for d, v in daily.items()}
+
+
 def annualized(daily, hold_days, cost_bp):
     """회전율로 환산한 연 수익·연 변동성·Sharpe.
 
@@ -333,7 +353,31 @@ def main():
         else:
             print("→ 재현 실패. §8-18 은 단일 시드 특수성이었을 가능성.")
 
-    print("\n비용은 왕복 고정 bp 근사 — 사다리의 레그별 스프레드 악화(§8-9~8-12) 미반영")
+    # ── 짝지은 검정 (docs §7-5 표준: 겹침보정 NW t)
+    if lad:
+        print("\n── 사다리 대비 짝지은 차이 (연환산 순수익, 겹침보정 NW t) ──")
+        print(f"{'변형':>10} {'비용':>6} {'D+10−사다리':>13} {'t':>6} {'D+20−사다리':>13} {'t':>6}")
+        for label in variants:
+            if label not in lad:
+                continue
+            for c in (41, 72):
+                row = f"{label:>10} {str(c) + 'bp':>6}"
+                for policy in ("단일 D+10", "단일 D+20"):
+                    other = summary.get(policy, {}).get(label)
+                    if not other:
+                        row += f"{'—':>13}{'—':>6}"
+                        continue
+                    a = annual_series(lad[label], POLICY_HOLD["사다리(1,2,3,5,10)"], c)
+                    b = annual_series(other, POLICY_HOLD[policy], c)
+                    common = sorted(set(a) & set(b))
+                    diffs = [b[d] - a[d] for d in common]
+                    m = sum(diffs) / len(diffs) if diffs else float("nan")
+                    t = newey_west_t(diffs, lag=20)
+                    row += f"{m*100:>+12.1f}%{t:>6.2f}"
+                print(row)
+
+    print("\n비용은 회전당 왕복 고정 bp — 사다리의 레그별 스프레드 악화(§8-9~8-12) 미반영")
+    print("Sharpe 는 사이클 독립 가정(sqrt(회전수)) — 겹치는 코호트 때문에 낙관 쪽 편향")
     return 0
 
 
