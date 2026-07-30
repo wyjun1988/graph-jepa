@@ -421,6 +421,9 @@ def load_model(model_dir: Path, device: torch.device) -> tuple[StockGraphJEPA, d
         temporal_state_context_skip=bool(
             ckpt_args.get("temporal_state_context_skip", False)
         ),
+        # 없으면 위 불리언에서 유도된다(하위호환). 이걸 빼먹으면 context 모드로
+        # 학습한 체크포인트를 폭 2 로 재구성해 load_state_dict 가 크기 불일치로 죽는다.
+        temporal_head_input=ckpt_args.get("temporal_head_input"),
         hybrid_fast_direct=bool(ckpt_args.get("hybrid_fast_direct", False)),
         return_correlation_loss_weight=float(
             ckpt_args.get("return_correlation_loss_weight", 0.0)

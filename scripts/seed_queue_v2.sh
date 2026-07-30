@@ -69,9 +69,24 @@ BASE="--hidden-dim 1024 --layers 10 --train-batch-size 16 --snapshot-workers $WO
 mkdir -p ops/training
 
 # A5000 24GB 에서 이 설정은 11.8GB 를 쓴다 → 동시 2개는 OOM. 앞 런이 비면 시작.
+#
+# 패턴은 반드시 '파이썬이 그 스크립트를 실행 중'까지 좁혀야 한다. 예전 패턴
+# 'run_real_backtest|evaluate_node_prediction' 은 그 문자열을 명령줄에 담은
+# 아무 셸/SSH 명령(진단용 pgrep 포함)에도 걸려서, 실제로는 아무것도 안 돌는데
+# 큐가 1시간을 대기하다 timeout 으로 죽는 일이 있었다.
+busy(){
+  pgrep -f 'venv/bin/python scripts/run_real_backtest\.py' > /dev/null 2>&1 ||
+  pgrep -f 'venv/bin/python scripts/evaluate_node_prediction\.py' > /dev/null 2>&1
+}
 guard(){
-  while pgrep -f 'run_real_backtest|evaluate_node_prediction' > /dev/null 2>&1; do
+  local waited=0
+  while busy; do
     sleep 30
+    waited=$((waited + 30))
+    if [ "$waited" -ge 7200 ]; then
+      echo "  ⚠ guard 2시간 초과 — 오탐 가능, 강제 진행"
+      break
+    fi
   done
 }
 
