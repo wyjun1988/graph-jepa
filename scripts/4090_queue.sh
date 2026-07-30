@@ -1,151 +1,90 @@
 #!/usr/bin/env bash
-# 4090 멀티시드 검증 큐
-# 목적: 상위 후보 2개를 4시드씩 돌려서 베이스라인 대비 유의미한 차이가 있는지 확인
+# 4090 큐 — 헤드 입력 실험을 폴드 r4 로 확장 (2026-07-30 개정)
 #
-# 베이스라인 (6시드 평균): IC +0.0386, σ=0.0094
-# 2σ 판정 문턱: 새 설정 4시드 평균 ≥ +0.0508
+# ── 왜 이걸 돌리나 ────────────────────────────────────────────────────────
+# A5000 에서 폴드 r5 로 context 모드(미래 잠재 미사용) 4시드를 돌리고 있다.
+# 4090 은 같은 실험을 폴드 r4 로 돌려 다폴드 근거를 만든다(docs §7-5 기준).
+# 기준선 ens_s3/17/29 의 r4 결과는 이미 확보돼 있어 짝지은 비교가 바로 된다.
 #
-# 후보 A: ema_fast — ema-decay 0.99 (기존 0.9995), hidden-completion-weight 0.25
-# 후보 B: vic_lat1 — latent-loss-weight 1.0, VICReg (variance 1.0, covariance 0.01, target 1.0)
+# ── 왜 이전 큐(ema 0.99 / VICReg)를 버렸나 ────────────────────────────────
+# 그 후보들은 지평을 섞은 IC 로 순위를 매긴 결과였다. 10일 보유와 직결되는
+# 지평 10 으로 다시 재면 둘 다 챔프보다 나쁘다:
+#     챔프 +0.0549 | ema 0.99 +0.0424 (-0.8σ) | VICReg lat1 +0.0400 (-0.9σ)
+# 자세한 근거: docs/MEASUREMENT_CORRECTIONS_20260730.md
 #
-# 예상 소요: 4090에서 ~2시간/런 × 8런 = ~16시간 (하룻밤)
+# ── 사전 준비 ────────────────────────────────────────────────────────────
+#   1) git clone git@github.com:wyjun1988/graph-jepa.git  (또는 git pull)
+#      → 오늘 수정분이 반드시 포함돼야 한다:
+#         - graph_jepa.py 의 --temporal-head-input
+#         - evaluate_node_prediction.py 의 load_model 배선 (없으면 평가가 죽는다)
+#         - seed_queue_v2.sh 의 guard 오탐 수정
+#   2) data/ 를 graph-jepa-4090.tar.gz 에서 풀어 넣기
+#   3) venv 준비 (torch + numpy 2.3.5 + pandas 2.3.3 권장 — 버전 고정이 재현에 중요)
+#
+# ── 실행 ─────────────────────────────────────────────────────────────────
+#   nohup bash scripts/4090_queue.sh > 4090.log 2>&1 &
+#   tail -f 4090.log
+#
+# ── 끝나고 돌려줄 것 ──────────────────────────────────────────────────────
+#   reports/walk_forward/node_eval/ctx_s*_fold1_20241106_to_20250908/
+#     ├── future_rollout.csv          (필수)
+#     └── return_1d_forecasts.csv     (필수 — 재분석 전부 여기서 나온다)
+#   tar -czf ctx_r4_results.tar.gz \
+#     reports/walk_forward/node_eval/ctx_s*_fold1_20241106_to_20250908/{future_rollout,return_1d_forecasts}.csv
+#
+# 예상 소요: 3시드 x 약 35~45분 = 2시간 내외 (4090 이 A5000 보다 다소 빠름)
 
 set -u
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PY="${ROOT}/venv/bin/python"
-# venv 경로가 다르면 수정:
-[ -x "$PY" ] || PY="$(which python3)"
-
 cd "$ROOT"
-FOLD="2025-09-05:2026-07-10"; SUF="20250905_to_20260710"
 
-# 공통 플래그 (베이스라인과 동일)
-BASE="--hidden-dim 1024 --layers 10 --train-batch-size 16 --snapshot-workers 8 \
---device cuda --eval-device cuda --max-steps 0 --lr 3e-4 --horizon 10 \
---universe krx --universe-manifest data/universes/krx500_pit_20191231.json --max-tickers 500 \
---cache-dir data/staging/ohlcv_lifecycle_hybrid_krx500_pit_20260710_v4/ohlcv \
---edge-correlation-mode signed --industry-edge-scale 0.2 --edge-top-k 6 \
---external-node-mode nodes --external-preset kr_global_rates --external-cache-dir data/external_cache \
---external-lag-days 1 --require-all-external-factors \
---event-path data/staging/news_krx500_dart_pit_v2_20260712/neutral_events.jsonl \
---fundamental-path data/fundamentals/opendart_krx500_pit_2020_2026_clean.jsonl \
---investor-cache-dir data/kiwoom_investor_cache \
---require-event-sensors --require-fundamental-sensors --require-investor-sensors \
---min-event-coverage 0.99 --min-fundamental-coverage 0.79 --min-investor-coverage 0.95 \
---event-coverage-mode mask_uncovered --fundamental-lag-days 1 --investor-flow-lag-days 1 \
---graph-neighbor-scale 1.0 --temporal-graph-neighbor-scale 0.0 \
---temporal-state-mode horizon_residual_heads --temporal-state-context-skip \
---mask-strategy mixed --training-manifest-schema-version 4 \
---temporal-exclude-feature-prefix fund_ --policy-rate-edge-scale 0.0 --amp-dtype bfloat16 \
---ema-decay 0.9995 --state-loss-weight 1.0 --downstream-auxiliary-loss-weight 0.25 \
---current-imputation-loss-weight 1.0 --entry-path-correlation-loss-weight 0.05 \
---sequence-window 0"
+# venv 자동 탐색 — 없으면 시스템 python3
+PY="${PY:-}"
+if [ -z "$PY" ]; then
+  for c in venv/bin/python .venv/bin/python "$(command -v python3)"; do
+    [ -x "$c" ] && { PY="$c"; break; }
+  done
+fi
+export PY
 
-guard(){ while [ "$(pgrep -c -f 'run_real_backtest|evaluate_node_prediction')" != "0" ]; do sleep 45; done; }
-have(){ [ -f "reports/walk_forward/node_eval/$1_fold1_${SUF}/future_rollout.csv" ]; }
-
-run(){
-  local N="$1"; shift
-  guard
-  have "$N" && { echo "  skip $N (already done)"; return 0; }
-  echo "  ▶ [$(date '+%H:%M:%S')] $N"
-  mkdir -p "ops/training"
-  "$PY" scripts/run_walk_forward_node_eval.py --name "$N" --fold "$FOLD" --start 2020-01-01 \
-    --epochs 24 --checkpoint-epochs 12 $BASE "$@" \
-    >> "ops/training/${N}.log" 2>&1 \
-    && echo "  ✅ $N" \
-    || { echo "  ❌ $N (exit $?)"; grep -iE "error|out of memory|Traceback" "ops/training/${N}.log" | tail -3; }
-}
-
-echo "════ 4090 멀티시드 검증 큐 시작 $(date '+%Y-%m-%d %H:%M') ════"
-echo "GPU: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo 'unknown')"
+echo "════ 4090 큐: context 모드 x 폴드 r4 ════"
+echo "python : $PY"
+"$PY" -c "import torch;print('torch  :',torch.__version__,'| cuda',torch.cuda.is_available(),'|',torch.cuda.get_device_name(0) if torch.cuda.is_available() else '-')"
 echo ""
 
-# ───────── 후보 A: EMA fast (ema=0.99, hidden-completion=0.25) ─────────
-echo "─── 후보 A: ema_fast (ema-decay=0.99) ───"
-for SEED in 3 5 11 23; do
-  run "ema_s${SEED}" --seed "$SEED" --latent-loss-weight 0.25 \
-    --ema-decay 0.99 --hidden-completion-weight 0.25
-done
-
-# ───────── 후보 B: VICReg + 고 latent (latent=1.0, vic) ─────────
-echo "─── 후보 B: vic_lat1 (latent=1.0 + VICReg) ───"
-for SEED in 3 5 11 23; do
-  run "vic_s${SEED}" --seed "$SEED" --latent-loss-weight 1.0 \
-    --latent-variance-weight 1.0 --latent-variance-target 1.0 --latent-covariance-weight 0.01
-done
-
-# ───────── 판정 ─────────
-echo ""
-echo "════ 판정 $(date '+%H:%M') ════"
-"$PY" - << 'PYEOF'
-import csv
-from pathlib import Path
-
-NE = Path("reports/walk_forward/node_eval")
-S = "20250905_to_20260710"
-
-def ic(name):
-    p = NE / f"{name}_fold1_{S}" / "future_rollout.csv"
-    if not p.exists():
-        return None
-    vals = []
-    with open(p) as f:
-        for row in csv.DictReader(f):
-            vals.append(float(row["realized_entry_path_ic_top100"]))
-    return sum(vals) / len(vals) if vals else None
-
-# Baseline seeds (already run on RunPod)
-base_seeds = {"sig_s3": 3, "sig_s5": 5, "sig_s11": 11,
-              "vf_s0.0_seed17": 17, "sig_s23": 23, "sig_s29": 29}
-base_ics = []
-for name in base_seeds:
-    v = ic(name)
-    if v is not None:
-        base_ics.append(v)
-
-if base_ics:
-    base_mean = sum(base_ics) / len(base_ics)
-    base_var = sum((x - base_mean)**2 for x in base_ics) / (len(base_ics) - 1)
-    base_std = base_var ** 0.5
-else:
-    base_mean, base_std = 0.0386, 0.0094
-
-print(f"베이스라인: mean={base_mean:+.4f} std={base_std:.4f} (n={len(base_ics)})")
-print()
-
-for label, prefix in [("A: ema_fast", "ema_s"), ("B: vic_lat1", "vic_s")]:
-    ics = []
-    for seed in [3, 5, 11, 23]:
-        name = f"{prefix}{seed}"
-        v = ic(name)
-        if v is not None:
-            ics.append((seed, v))
-            print(f"  {name}: IC={v:+.4f}")
-        else:
-            print(f"  {name}: 미완료")
-
-    if len(ics) >= 2:
-        vals = [x[1] for x in ics]
-        m = sum(vals) / len(vals)
-        v = sum((x - m)**2 for x in vals) / (len(vals) - 1)
-        s = v ** 0.5
-        delta = m - base_mean
-        # Two-sample t-test SE
-        se = (base_std**2/len(base_ics) + s**2/len(vals)) ** 0.5
-        t = delta / se if se > 0 else 0
-        print(f"  >> {label}: mean={m:+.4f} std={s:.4f} delta={delta:+.4f} t={t:+.1f}")
-        if t > 2:
-            print(f"  >> 판정: 유의미하게 우세 (t={t:.1f} > 2)")
-        elif t < -2:
-            print(f"  >> 판정: 유의미하게 열세")
-        else:
-            print(f"  >> 판정: 유의미한 차이 없음 (|t|={abs(t):.1f} < 2)")
-    print()
-
-print("단일 폴드 결과 — 확정은 다시드x다폴드 필요")
+# 사전 점검 — 없는 채로 2시간 돌리고 평가에서 죽는 일을 막는다
+echo "── 사전 점검 ──"
+fail=0
+"$PY" - <<'PYEOF' || fail=1
+import sys
+sys.path.insert(0, ".")
+from stock_v2.graph_jepa import StockGraphJEPA, TEMPORAL_HEAD_INPUTS
+assert "context" in TEMPORAL_HEAD_INPUTS, "graph_jepa 에 context 모드가 없다 — git pull 필요"
+m = StockGraphJEPA(num_features=20, hidden_dim=32, num_layers=2,
+                   temporal_state_mode="horizon_residual_heads",
+                   temporal_head_steps=[1, 10], temporal_head_input="context")
+assert m.temporal_head_width == 1
+print("  graph_jepa context 모드 OK")
+src = open("scripts/evaluate_node_prediction.py").read()
+assert "temporal_head_input=ckpt_args" in src, \
+    "evaluate_node_prediction 의 load_model 배선이 없다 — 평가가 크기 불일치로 죽는다. git pull 필요"
+print("  평가 load_model 배선 OK")
 PYEOF
+for f in data/staging/ohlcv_lifecycle_hybrid_krx500_pit_20260710_v4/ohlcv \
+         data/universes/krx500_pit_20191231.json \
+         data/staging/news_krx500_dart_pit_v2_20260712/neutral_events.jsonl \
+         data/fundamentals/opendart_krx500_pit_2020_2026_clean.jsonl \
+         data/kiwoom_investor_cache data/external_cache; do
+  [ -e "$f" ] || { echo "  ❌ 없음: $f"; fail=1; }
+done
+[ "$fail" = 0 ] && echo "  데이터 OK" || { echo ""; echo "사전 점검 실패 — 중단"; exit 1; }
+echo ""
 
-echo "════ 완료 $(date '+%Y-%m-%d %H:%M') ════"
+PREFIX=ctx_s EXTRA="--temporal-head-input context" \
+  bash scripts/seed_queue_v2.sh 1 r4 3 17 29
+
+echo ""
+echo "════ 완료 — 아래를 압축해 돌려주세요 ════"
+ls -d reports/walk_forward/node_eval/ctx_s*_fold1_20241106_to_20250908 2>/dev/null
+echo ""
+echo "tar -czf ctx_r4_results.tar.gz reports/walk_forward/node_eval/ctx_s*_fold1_20241106_to_20250908/{future_rollout,return_1d_forecasts}.csv"
