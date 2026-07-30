@@ -1344,6 +1344,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--current-imputation-loss-weight", type=float, default=0.0)
     parser.add_argument("--temporal-state-context-skip", action="store_true")
     parser.add_argument(
+        "--temporal-head-input",
+        choices=["context_skip", "future", "context"],
+        default=None,
+        help="예측 헤드 입력. context_skip=[현재, 미래-현재] (기존 기본), "
+             "future=미래만, context=현재만(미래 잠재 미사용). "
+             "미지정 시 --temporal-state-context-skip 으로부터 유도 (하위호환).",
+    )
+    parser.add_argument(
         "--state-feature-weight",
         action="append",
         default=[],
@@ -2044,6 +2052,7 @@ def main() -> None:
         state_feature_weights=state_feature_weights,
         temporal_state_feature_weights=temporal_state_feature_weights,
         temporal_state_context_skip=args.temporal_state_context_skip,
+        temporal_head_input=args.temporal_head_input,
         hybrid_fast_direct=args.hybrid_fast_direct,
         return_correlation_loss_weight=args.return_correlation_loss_weight,
         entry_path_correlation_loss_weight=(

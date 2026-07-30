@@ -141,6 +141,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state-loss-weight", type=float, default=0.35)
     parser.add_argument("--current-imputation-loss-weight", type=float, default=0.0)
     parser.add_argument("--temporal-state-context-skip", action="store_true")
+    parser.add_argument(
+        "--temporal-head-input",
+        choices=["context_skip", "future", "context"],
+        default=None,
+        help="예측 헤드 입력 (context=미래 잠재 미사용). 미지정 시 하위호환 유도.",
+    )
     parser.add_argument("--state-feature-weight", action="append", default=[])
     parser.add_argument(
         "--temporal-exclude-feature-prefix",
@@ -433,6 +439,8 @@ def main() -> None:
             cmd.append("--hybrid-fast-direct")
         if args.temporal_state_context_skip:
             cmd.append("--temporal-state-context-skip")
+        if args.temporal_head_input:
+            cmd.extend(["--temporal-head-input", args.temporal_head_input])
         if args.normalize_predictor_output:
             cmd.append("--normalize-predictor-output")
         if args.universe_manifest:

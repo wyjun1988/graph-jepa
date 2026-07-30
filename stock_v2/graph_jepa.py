@@ -15,6 +15,7 @@ PATH_RETURN_TASK_INDEX = 0
 
 from stock_v2.plan_timing import plan_timing_loss
 
+TEMPORAL_HEAD_INPUTS = ("context_skip", "future", "context")
 DOWNSTREAM_AUXILIARY_TASKS = (
     "path_return",
     "max_favorable_excursion",
@@ -530,6 +531,7 @@ class StockGraphJEPA(nn.Module):
         state_feature_weights: Optional[Sequence[float]] = None,
         temporal_state_feature_weights: Optional[Sequence[float]] = None,
         temporal_state_context_skip: bool = False,
+        temporal_head_input: Optional[str] = None,
         hybrid_fast_direct: bool = False,
         return_correlation_loss_weight: float = 0.0,
         entry_path_correlation_loss_weight: float = 0.0,
@@ -596,10 +598,25 @@ class StockGraphJEPA(nn.Module):
         self.latent_loss_weight = float(latent_loss_weight)
         self.state_loss_weight = state_loss_weight
         self.temporal_state_mode = temporal_state_mode
-        self.temporal_state_context_skip = bool(temporal_state_context_skip)
-        if self.temporal_state_context_skip and temporal_state_mode != "horizon_residual_heads":
+        # 하위호환: 예전 체크포인트는 불리언만 갖고 있으므로 거기서 모드를 유도한다.
+        if temporal_head_input is None:
+            temporal_head_input = (
+                "context_skip" if bool(temporal_state_context_skip) else "future"
+            )
+        if temporal_head_input not in TEMPORAL_HEAD_INPUTS:
             raise ValueError(
-                "temporal_state_context_skip requires horizon_residual_heads mode"
+                "temporal_head_input must be one of %s" % (TEMPORAL_HEAD_INPUTS,)
+            )
+        self.temporal_head_input = temporal_head_input
+        self.temporal_state_context_skip = temporal_head_input == "context_skip"
+        self.temporal_head_width = 2 if temporal_head_input == "context_skip" else 1
+        if (
+            temporal_head_input != "future"
+            and temporal_state_mode != "horizon_residual_heads"
+        ):
+            raise ValueError(
+                "temporal_head_input=%s requires horizon_residual_heads mode"
+                % temporal_head_input
             )
         self.temporal_residual_short_steps = int(temporal_residual_short_steps)
         self.temporal_head_steps = normalized_head_steps
@@ -879,7 +896,7 @@ class StockGraphJEPA(nn.Module):
         self.temporal_heads = nn.ModuleDict(
             {
                 str(step): MLP(
-                    hidden_dim * (2 if self.temporal_state_context_skip else 1),
+                    hidden_dim * self.temporal_head_width,
                     num_features * 2,
                     hidden_dim=hidden_dim,
                 )
@@ -888,9 +905,7 @@ class StockGraphJEPA(nn.Module):
             if temporal_state_mode == "horizon_residual_heads"
             else {}
         )
-        auxiliary_input_dim = hidden_dim * (
-            2 if self.temporal_state_context_skip else 1
-        )
+        auxiliary_input_dim = hidden_dim * self.temporal_head_width
         auxiliary_hidden_dim = min(256, max(32, hidden_dim // 4))
         self.downstream_auxiliary_heads = nn.ModuleDict(
             {
@@ -1240,6 +1255,27 @@ class StockGraphJEPA(nn.Module):
             target_batch.graph_index,
         )
 
+    def _temporal_head_input(
+        self,
+        z_context: Optional[Tensor],
+        z_pred: Tensor,
+    ) -> Tensor:
+        """예측 헤드 입력 구성.
+
+        context 모드는 미래 잠재를 아예 쓰지 않는다. 근거: 프로덕션 4모델에서
+        미래 증분을 지우거나 종목순열해도 IC 가 떨어지지 않았고(4/4 상승, 순열
+        NW t +0.02~+1.44), 현재 잠재를 지우면 무너졌다(4/4 NW t -2.49~-3.58).
+        docs/MEASUREMENT_CORRECTIONS_20260730.md 참조.
+        """
+        mode = self.temporal_head_input
+        if mode == "future":
+            return z_pred
+        if z_context is None:
+            raise ValueError("temporal_head_input=%s requires z_context" % mode)
+        if mode == "context":
+            return z_context
+        return torch.cat([z_context, z_pred - z_context], dim=-1)
+
     def predict_downstream_auxiliary(
         self,
         z_context: Tensor,
@@ -1250,11 +1286,7 @@ class StockGraphJEPA(nn.Module):
 
         if z_context.shape != z_pred.shape:
             raise ValueError("z_context and z_pred must have the same shape")
-        head_input = (
-            torch.cat([z_context, z_pred - z_context], dim=-1)
-            if self.temporal_state_context_skip
-            else z_pred
-        )
+        head_input = self._temporal_head_input(z_context, z_pred)
         predictions = []
         for task_name in DOWNSTREAM_AUXILIARY_TASKS:
             key = f"{int(rollout_steps)}:{task_name}"
@@ -1490,11 +1522,7 @@ class StockGraphJEPA(nn.Module):
             raise ValueError("z_context and z_pred must have the same shape")
         if supervision_node_mask.shape != z_pred.shape[:1]:
             raise ValueError("supervision_node_mask must contain one value per node")
-        head_input = (
-            torch.cat([z_context, z_pred - z_context], dim=-1)
-            if self.temporal_state_context_skip
-            else z_pred
-        )
+        head_input = self._temporal_head_input(z_context, z_pred)
         stock_mask = supervision_node_mask.to(device=z_pred.device) > 0.5
         groups = (
             torch.zeros(z_pred.shape[0], dtype=torch.long, device=z_pred.device)
@@ -1573,11 +1601,7 @@ class StockGraphJEPA(nn.Module):
             raise ValueError("z_context and z_pred must have the same shape")
         if supervision_node_mask.shape != z_pred.shape[:1]:
             raise ValueError("supervision_node_mask must contain one value per node")
-        head_input = (
-            torch.cat([z_context, z_pred - z_context], dim=-1)
-            if self.temporal_state_context_skip
-            else z_pred
-        )
+        head_input = self._temporal_head_input(z_context, z_pred)
         head_input = self.downstream_transition_projector(head_input)
         stock_mask = supervision_node_mask.to(device=z_pred.device) > 0.5
         pooled_stock_mask = stock_mask
@@ -2155,14 +2179,7 @@ class StockGraphJEPA(nn.Module):
                     "no horizon-specific state head for rollout_steps="
                     f"{rollout_steps}; configured={list(self.temporal_head_steps)}"
                 )
-            if self.temporal_state_context_skip:
-                if z_context is None:
-                    raise ValueError(
-                        "temporal state context skip requires z_context"
-                    )
-                head_input = torch.cat([z_context, z_pred - z_context], dim=-1)
-            else:
-                head_input = z_pred
+            head_input = self._temporal_head_input(z_context, z_pred)
             direct, delta = self.temporal_heads[key](head_input).chunk(2, dim=-1)
             observed = context_batch.feature_mask > 0.5
             residual = context_batch.node_features + delta
