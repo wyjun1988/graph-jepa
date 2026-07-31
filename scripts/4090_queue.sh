@@ -79,6 +79,10 @@ assert "r1) FOLD=" in q and "r2) FOLD=" in q, \
     "seed_queue_v2.sh 에 r1·r2 폴드가 없다 — git pull 필요"
 assert "--save-return-forecasts" in q, "큐에 --save-return-forecasts 가 없다"
 print("  평가 load_model 배선 · r1/r2 폴드 · 예측저장 OK")
+assert "/workspace" not in q, \
+    "seed_queue_v2.sh 에 RunPod 경로(/workspace)가 남아 있다 — git pull 필요"
+assert "nproc" in q, "워커 수가 코어 기반이 아니다 — git pull 필요"
+print("  RunPod 하드코딩 없음 · 워커 코어기반 OK")
 PYEOF
 for f in data/staging/ohlcv_lifecycle_hybrid_krx500_pit_20260710_v4/ohlcv \
          data/universes/krx500_pit_20191231.json \

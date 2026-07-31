@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# ⚠ DEPRECATED — scripts/seed_queue_v2.sh 를 쓰세요.
+#   이 파일은 r4/r5 폴드만 알고, guard 의 pgrep 패턴이 넓어
+#   무관한 셸 명령에도 걸려 큐가 멈추는 버그가 남아 있습니다.
 # 챔프(vf_s0.0_seed17) 설정을 시드만 바꿔 재학습 — 시드 앙상블 재료 생성.
 #
 # 왜: 59개 실험 중 2σ를 넘긴 설정이 하나도 없었고, 시드 산포(σ=0.0094)가
@@ -15,12 +18,25 @@
 #          bash scripts/seed_ensemble_queue.sh 2 r5 5 11 17 23 29
 #          bash scripts/seed_ensemble_queue.sh 2 r4 3 5 11 17 23 29
 
+echo "⚠ 이 스크립트는 폐기됐습니다. scripts/seed_queue_v2.sh 를 쓰세요." >&2
+exit 1
+
 set -u
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-ROOT=/workspace/stock-v2-candidate-v17
-PY=/workspace/venv/bin/python
+# 경로는 스크립트 위치에서 유도한다. RunPod(/workspace) 전용으로 박아두면
+# 4090·로컬에서 "No such file or directory" 로 죽는다.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+
+# 파이썬: PY 환경변수 > venv/ > .venv/ > 시스템 python3
+if [ -z "${PY:-}" ]; then
+  for c in venv/bin/python .venv/bin/python venv/bin/python3 .venv/bin/python3; do
+    [ -x "$ROOT/$c" ] && { PY="$ROOT/$c"; break; }
+  done
+fi
+: "${PY:=$(command -v python3)}"
+[ -x "$PY" ] || { echo "파이썬을 못 찾았습니다. PY=/경로/python 으로 지정하세요."; exit 1; }
 
 CONCURRENCY="${1:-1}"; shift
 FOLD_TAG="${1:-r5}"; shift

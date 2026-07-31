@@ -18,9 +18,19 @@
 set -u
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-ROOT=/workspace/stock-v2-candidate-v17
-PY=/workspace/venv/bin/python
+# 경로는 스크립트 위치에서 유도한다. RunPod(/workspace) 전용으로 박아두면
+# 4090·로컬에서 "No such file or directory" 로 죽는다.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+
+# 파이썬: PY 환경변수 > venv/ > .venv/ > 시스템 python3
+if [ -z "${PY:-}" ]; then
+  for c in venv/bin/python .venv/bin/python venv/bin/python3 .venv/bin/python3; do
+    [ -x "$ROOT/$c" ] && { PY="$ROOT/$c"; break; }
+  done
+fi
+: "${PY:=$(command -v python3)}"
+[ -x "$PY" ] || { echo "파이썬을 못 찾았습니다. PY=/경로/python 으로 지정하세요."; exit 1; }
 
 CONCURRENCY="${1:-1}"; shift
 FOLD_TAG="${1:-r5}"; shift
@@ -42,8 +52,14 @@ SEEDS=("$@")
 PREFIX="${PREFIX:-ens_s}"
 EXTRA="${EXTRA:-}"
 
-# 동시 실행 시 96 vCPU를 나눠 쓴다 (경합하면 동시실행 이득이 사라짐)
-if [ "$CONCURRENCY" -gt 1 ]; then WORKERS=40; else WORKERS=48; fi
+# 스냅샷 워커는 이 머신의 코어 수에서 정한다. RunPod(96 vCPU) 기준 48 을
+# 박아두면 코어가 적은 머신에서 스래싱으로 오히려 느려진다.
+NCPU="$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 8) )"
+WORKERS=$(( NCPU / 2 ))
+[ "$CONCURRENCY" -gt 1 ] && WORKERS=$(( NCPU / (2 * CONCURRENCY) ))
+[ "$WORKERS" -lt 2 ] && WORKERS=2
+[ "$WORKERS" -gt 48 ] && WORKERS=48        # 48 이상은 이득이 없었다
+export WORKERS_NCPU="$NCPU"
 
 # 챔프 설정 — sig_s* 큐와 동일한 BASE (sequence-window 0 = 어텐션 없음)
 BASE="--hidden-dim 1024 --layers 10 --train-batch-size 16 --snapshot-workers $WORKERS \
@@ -115,7 +131,8 @@ run_seed(){
 
 echo "════ 시드 앙상블 큐 $(date '+%Y-%m-%d %H:%M') ════"
 echo "GPU: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader)"
-echo "폴드: ${FOLD_TAG} (${FOLD}) | 시드: ${SEEDS[*]} | 동시실행: ${CONCURRENCY} | 워커: ${WORKERS}"
+echo "폴드: ${FOLD_TAG} (${FOLD}) | 시드: ${SEEDS[*]} | 동시실행: ${CONCURRENCY}"
+echo "코어 ${WORKERS_NCPU}개 → 스냅샷 워커 ${WORKERS}"
 echo "이름: ${PREFIX}* | 추가플래그: ${EXTRA:-(없음)}"
 echo ""
 
