@@ -130,17 +130,25 @@ run_seed(){
 }
 
 echo "════ 시드 앙상블 큐 $(date '+%Y-%m-%d %H:%M') ════"
-echo "GPU: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader)"
+echo "GPU: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo '(nvidia-smi 없음)')"
 echo "폴드: ${FOLD_TAG} (${FOLD}) | 시드: ${SEEDS[*]} | 동시실행: ${CONCURRENCY}"
 echo "코어 ${WORKERS_NCPU}개 → 스냅샷 워커 ${WORKERS}"
 echo "이름: ${PREFIX}* | 추가플래그: ${EXTRA:-(없음)}"
 echo ""
 
+# bash 3.2(맥 기본)에는 wait -n 이 없다. 그대로 두면 아래 제한이 조용히 풀려
+# 시드 전부가 동시에 떠 즉시 OOM 이다 — 리눅스에서는 문제가 없지만 실패했을 때
+# 밤을 통째로 날리는 종류라 막아둔다. 없으면 배치 단위로 기다린다(약간 느릴 뿐).
+if [ "${BASH_VERSINFO[0]:-0}" -ge 4 ]; then HAS_WAIT_N=1; else HAS_WAIT_N=0; fi
+
 running=0
 for S in "${SEEDS[@]}"; do
   run_seed "$S" &
   running=$((running+1))
-  if [ "$running" -ge "$CONCURRENCY" ]; then wait -n; running=$((running-1)); fi
+  if [ "$running" -ge "$CONCURRENCY" ]; then
+    if [ "$HAS_WAIT_N" = 1 ]; then wait -n; running=$((running-1));
+    else wait; running=0; fi
+  fi
 done
 wait
 
