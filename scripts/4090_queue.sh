@@ -86,7 +86,15 @@ echo ""
 PREFIX=ens_s bash scripts/seed_queue_v2.sh 1 r3 3 17 29
 
 echo ""
-echo "════ 완료 — 아래를 압축해 돌려주세요 ════"
-ls -d reports/walk_forward/node_eval/ens_s*_fold1_20240104_to_20241107 2>/dev/null
+echo "════ 결과 압축·요약 ════"
+# 원본 예측은 시드당 약 85MB 라 빼오기 어렵다. 분석에 실제로 필요한 부분만
+# 1MB 남짓으로 줄이고, 동시에 챔프 단독 지표를 화면에 찍는다.
+"$PY" scripts/distill_forecasts.py --fold r3 --seeds 3 17 29 --out r3_compact.csv
+gzip -kf r3_compact.csv 2>/dev/null && echo "  gzip: r3_compact.csv.gz ($(du -h r3_compact.csv.gz 2>/dev/null | cut -f1))"
 echo ""
-echo "tar -czf r3_results.tar.gz reports/walk_forward/node_eval/ens_s*_fold1_20240104_to_20241107/{future_rollout,return_1d_forecasts}.csv"
+echo "════ 돌려주실 것 ════"
+echo "  1순위: r3_compact.csv.gz  (수백 KB — 이것만 있으면 사전등록 검정이 끝납니다)"
+echo "  2순위: 위 '챔프 단독 요약' 화면 복사 (파일을 못 빼올 때)"
+echo ""
+echo "원본이 필요하면(선택):"
+echo "  tar -czf r3_full.tar.gz reports/walk_forward/node_eval/ens_s*_fold1_20240104_to_20241107/{future_rollout,return_1d_forecasts}.csv"
