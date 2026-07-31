@@ -121,14 +121,21 @@ def main():
     ap.add_argument("--folds", nargs="+", default=["r4", "r5"])
     ap.add_argument("--seeds", nargs="+", type=int, default=[3, 5, 11, 17, 23, 29])
     ap.add_argument("--prefix", default="ens_s")
+    ap.add_argument("--heads", default="1,2,3,5,10",
+                    help="예측 파일에 있는 지평들. hz_s 런이면 1,2,3,5,10,15,20")
     args = ap.parse_args()
+    global HEADS
+    HEADS = tuple(int(x) for x in args.heads.split(","))
 
     print("가격 패널 적재 중 …", flush=True)
     panel = load_prices()
 
-    # 신호 후보: 단일 헤드 + 두 가지 헤드 평균
+    # 신호 후보: 단일 헤드 + 헤드 평균들 (+긴 헤드가 있으면 그 조합)
     signals = [(f"h{h}", (h,)) for h in HEADS] + \
-              [("mean(h1..h10)", HEADS), ("mean(h5,h10)", (5, 10))]
+              [(f"mean(h1..h{max(HEADS)})", HEADS), ("mean(h5,h10)", (5, 10))]
+    if 15 in HEADS and 20 in HEADS:
+        signals += [("mean(h10,h15,h20)", (10, 15, 20)),
+                    ("mean(h15,h20)", (15, 20))]
 
     all_res = {}          # (fold, sig, hold) -> (sharpe, gross%/hold, ic)
     for fold in args.folds:
