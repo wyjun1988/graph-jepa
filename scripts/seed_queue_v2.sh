@@ -55,7 +55,7 @@ EXTRA="${EXTRA:-}"
 # 스냅샷 워커는 이 머신의 코어 수에서 정한다. RunPod(96 vCPU) 기준 48 을
 # 박아두면 코어가 적은 머신에서 스래싱으로 오히려 느려진다.
 NCPU="$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 8) )"
-WORKERS=$(( NCPU / 2 ))
+WORKERS="${WORKERS:-$(( NCPU / 2 ))}"
 [ "$CONCURRENCY" -gt 1 ] && WORKERS=$(( NCPU / (2 * CONCURRENCY) ))
 [ "$WORKERS" -lt 2 ] && WORKERS=2
 [ "$WORKERS" -gt 48 ] && WORKERS=48        # 48 이상은 이득이 없었다
