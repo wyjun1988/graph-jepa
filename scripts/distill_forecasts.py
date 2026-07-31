@@ -56,12 +56,25 @@ def pearson(xs, ys):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--fold", required=True, choices=sorted(FOLDS))
+    ap.add_argument("--fold", default="r3", choices=sorted(FOLDS))
     ap.add_argument("--seeds", nargs="+", type=int, required=True)
     ap.add_argument("--prefix", default="ens_s")
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", default="")
+    ap.add_argument("--list", action="store_true",
+                    help="어떤 런이 있는지만 보여주고 끝낸다")
     args = ap.parse_args()
+    if args.list or not args.out:
+        print("=== node_eval 에 있는 런 ===")
+        for d in sorted(NODE_EVAL.glob("*_fold1_*")):
+            f = d / "return_1d_forecasts.csv"
+            mark = f"{f.stat().st_size/1024/1024:6.1f}MB" if f.exists() else "  종목별예측 없음"
+            print(f"  {d.name:<44} {mark}")
+        if not args.out:
+            print("\n--out 을 주면 압축을 실행합니다.")
+            return 0
     suffix = FOLDS[args.fold]
+    if args.list:
+        return 0
 
     per_seed = []
     for s in args.seeds:
