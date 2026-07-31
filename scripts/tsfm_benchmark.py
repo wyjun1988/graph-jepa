@@ -35,7 +35,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 NODE_EVAL = ROOT / "reports" / "walk_forward" / "node_eval"
 OHLCV = ROOT / "data/staging/ohlcv_lifecycle_hybrid_krx500_pit_20260710_v4/ohlcv"
-FOLDS = {"r5": "fold1_20250905_to_20260710", "r4": "fold1_20241106_to_20250908"}
+FOLDS = {"r5": "fold1_20250905_to_20260710",
+         "r4": "fold1_20241106_to_20250908",
+         "r3": "fold1_20240104_to_20241107",
+         "r2": "fold1_20230307_to_20240105",
+         "r1": "fold1_20220510_to_20230306"}
 HORIZON = 10
 TOP_N = 100
 CONTEXT = 256          # 컨텍스트로 쓸 거래일 수

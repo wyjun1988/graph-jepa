@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
-# 4090 큐 — 사전등록 검정용 r3 챔프 예측 생성 (2026-07-31 개정)
+# 4090 배치 — 5폴드 패널 완성 (2026-07-31 개정 2)
 #
 # ── 왜 이걸 돌리나 ────────────────────────────────────────────────────────
-# docs/PREREG_FILTER_R3_20260731.md 사전등록 검정에 r3 폴드의 챔프 종목별
-# 예측이 필요하다. r3 기존 런 3개는 future_rollout.csv(일별 집계)만 있고
-# 종목별 예측이 없다 — --save-return-forecasts 는 2026-07-30 에 추가됐다.
+# 지금 이 프로젝트의 거의 모든 결론이 "단일 폴드" 또는 "두 폴드"에 걸려 있다.
+# 그런데 채택 기준(docs §7-5)은 다시드 x 5폴드 짝지은 t검정 + 최악폴드 악화
+# 금지다. 즉 지금 상태로는 무엇도 채택 판정을 내릴 수 없다.
 #
-# 이 큐가 만드는 것: ens_s3/17/29 @ r3 의 return_1d_forecasts.csv
-# 그것이 있어야 A(챔프 상위20) / C(챔프필터+Chronos) / D(Chronos 단독) 검정이 된다.
+# 확보:    r5(6시드) · r4(3시드) · r3(3시드)
+# 이 배치: r2 · r1 을 같은 시드로 채워 5폴드 패널을 완성한다.
+#
+# 완성되면 GPU 없이 로컬에서 다음이 전부 5폴드로 재계산된다:
+#   청산 정책(사다리 vs D+10/15/20/30) ← 현재 최대 개선축
+#   제로샷 TSFM 비교 / 사전등록 필터 검정 / 시드 앙상블 포화곡선
+# 즉 이 배치 하나가 앞으로의 재분석을 전부 해금한다.
+#
+# ── 시드를 3/17/29 로 고정하는 이유와 주의 ───────────────────────────────
+# 폴드 간 비교는 같은 시드로 짝지어야 시드 분산이 상쇄된다.
+# 주의: r5 에서 seed 3(+0.0661)·17(+0.0539)이 6개 중 1·2위였다. 이 조합은
+# 다소 운이 좋은 편이고(약한 3개 조합은 Sharpe -0.50), 절대 수준은 낙관 쪽이다.
+# 폴드 간 상대 비교에만 쓸 것.
 #
 # ── 이전 큐들을 왜 버렸나 ─────────────────────────────────────────────────
 # ema 0.99 / VICReg: 지평 혼합 IC 로 매긴 순위였고, 지평 10 으로 다시 재면
@@ -15,11 +26,7 @@
 # context 모드 x r4: r5 에서 4/4 열세(짝지은 t -3.83)로 이미 결론이 났다.
 #
 # ── 사전 준비 ────────────────────────────────────────────────────────────
-#   1) git clone git@github.com:wyjun1988/graph-jepa.git  (또는 git pull)
-#      → 오늘 수정분이 반드시 포함돼야 한다:
-#         - graph_jepa.py 의 --temporal-head-input
-#         - evaluate_node_prediction.py 의 load_model 배선 (없으면 평가가 죽는다)
-#         - seed_queue_v2.sh 의 guard 오탐 수정
+#   1) git pull   ← r1·r2 폴드 정의가 오늘 추가됐다. 없으면 "폴드는 r1~r5" 오류
 #   2) data/ 를 graph-jepa-4090.tar.gz 에서 풀어 넣기
 #   3) venv 준비 (torch + numpy 2.3.5 + pandas 2.3.3 권장 — 버전 고정이 재현에 중요)
 #
@@ -28,13 +35,9 @@
 #   tail -f 4090.log
 #
 # ── 끝나고 돌려줄 것 ──────────────────────────────────────────────────────
-#   reports/walk_forward/node_eval/ens_s*_fold1_20240104_to_20241107/
-#     ├── future_rollout.csv          (필수)
-#     └── return_1d_forecasts.csv     (필수 — 재분석 전부 여기서 나온다)
-#   tar -czf r3_results.tar.gz \
-#     reports/walk_forward/node_eval/ens_s*_fold1_20240104_to_20241107/{future_rollout,return_1d_forecasts}.csv
+#   r2_compact.csv.gz · r1_compact.csv.gz  (각 수백 KB, 스크립트가 자동 생성)
 #
-# 예상 소요: 3시드 x 약 35~45분 = 2시간 내외 (4090 이 A5000 보다 다소 빠름)
+# 예상 소요: 6런(2폴드 x 3시드) x 35~45분 = 4~5시간
 # 중간에 멈춰도 안전하다 — 큐는 이미 끝난 시드를 건너뛴다.
 
 set -u
@@ -50,7 +53,7 @@ if [ -z "$PY" ]; then
 fi
 export PY
 
-echo "════ 4090 큐: 사전등록 검정용 r3 챔프 3시드 ════"
+echo "════ 4090 배치: 5폴드 패널 완성 (r2 · r1) ════"
 echo "python : $PY"
 "$PY" -c "import torch;print('torch  :',torch.__version__,'| cuda',torch.cuda.is_available(),'|',torch.cuda.get_device_name(0) if torch.cuda.is_available() else '-')"
 echo ""
@@ -71,7 +74,11 @@ print("  graph_jepa context 모드 OK")
 src = open("scripts/evaluate_node_prediction.py").read()
 assert "temporal_head_input=ckpt_args" in src, \
     "evaluate_node_prediction 의 load_model 배선이 없다 — 평가가 크기 불일치로 죽는다. git pull 필요"
-print("  평가 load_model 배선 OK")
+q = open("scripts/seed_queue_v2.sh").read()
+assert "r1) FOLD=" in q and "r2) FOLD=" in q, \
+    "seed_queue_v2.sh 에 r1·r2 폴드가 없다 — git pull 필요"
+assert "--save-return-forecasts" in q, "큐에 --save-return-forecasts 가 없다"
+print("  평가 load_model 배선 · r1/r2 폴드 · 예측저장 OK")
 PYEOF
 for f in data/staging/ohlcv_lifecycle_hybrid_krx500_pit_20260710_v4/ohlcv \
          data/universes/krx500_pit_20191231.json \
@@ -83,18 +90,23 @@ done
 [ "$fail" = 0 ] && echo "  데이터 OK" || { echo ""; echo "사전 점검 실패 — 중단"; exit 1; }
 echo ""
 
-PREFIX=ens_s bash scripts/seed_queue_v2.sh 1 r3 3 17 29
+for F in r2 r1; do
+  echo "──────── 폴드 $F ────────"
+  PREFIX=ens_s bash scripts/seed_queue_v2.sh 1 "$F" 3 17 29
+done
 
 echo ""
 echo "════ 결과 압축·요약 ════"
 # 원본 예측은 시드당 약 85MB 라 빼오기 어렵다. 분석에 실제로 필요한 부분만
 # 1MB 남짓으로 줄이고, 동시에 챔프 단독 지표를 화면에 찍는다.
-"$PY" scripts/distill_forecasts.py --fold r3 --seeds 3 17 29 --out r3_compact.csv
-gzip -kf r3_compact.csv 2>/dev/null && echo "  gzip: r3_compact.csv.gz ($(du -h r3_compact.csv.gz 2>/dev/null | cut -f1))"
+for F in r2 r1; do
+  echo "──────── $F ────────"
+  "$PY" scripts/distill_forecasts.py --fold "$F" --seeds 3 17 29 --out "${F}_compact.csv" \
+    && gzip -kf "${F}_compact.csv"
+done
 echo ""
 echo "════ 돌려주실 것 ════"
-echo "  1순위: r3_compact.csv.gz  (수백 KB — 이것만 있으면 사전등록 검정이 끝납니다)"
-echo "  2순위: 위 '챔프 단독 요약' 화면 복사 (파일을 못 빼올 때)"
+ls -lh r2_compact.csv.gz r1_compact.csv.gz 2>/dev/null | awk '{print "  "$NF"  "$5}'
 echo ""
-echo "원본이 필요하면(선택):"
-echo "  tar -czf r3_full.tar.gz reports/walk_forward/node_eval/ens_s*_fold1_20240104_to_20241107/{future_rollout,return_1d_forecasts}.csv"
+echo "  이 두 파일(각 수백 KB)만 있으면 5폴드 재분석이 전부 됩니다."
+echo "  못 빼오시면 위 '챔프 단독 요약' 화면 두 개를 복사해 주세요."

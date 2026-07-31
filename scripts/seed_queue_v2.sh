@@ -10,7 +10,7 @@
 # IC가 각각 +0.0521/+0.0261/+0.0299/+0.0419/+0.0400 을 재현해야 한다.
 # 재현되면 새 pod의 데이터·코드·torch 환경이 검증된 것.
 #
-# 사용법:  bash scripts/seed_queue_v2.sh <동시실행수> <폴드:r3|r4|r5> <시드...>
+# 사용법:  bash scripts/seed_queue_v2.sh <동시실행수> <폴드:r1~r5> <시드...>
 #   예)    bash scripts/seed_ensemble_queue.sh 1 r5 3
 #          bash scripts/seed_ensemble_queue.sh 2 r5 5 11 17 23 29
 #          bash scripts/seed_ensemble_queue.sh 2 r4 3 5 11 17 23 29
@@ -28,7 +28,9 @@ case "$FOLD_TAG" in
   r5) FOLD="2025-09-05:2026-07-10"; SUF="20250905_to_20260710" ;;
   r4) FOLD="2024-11-06:2025-09-08"; SUF="20241106_to_20250908" ;;
   r3) FOLD="2024-01-04:2024-11-07"; SUF="20240104_to_20241107" ;;
-  *)  echo "폴드는 r3/r4/r5"; exit 1 ;;
+  r2) FOLD="2023-03-07:2024-01-05"; SUF="20230307_to_20240105" ;;
+  r1) FOLD="2022-05-10:2023-03-06"; SUF="20220510_to_20230306" ;;
+  *)  echo "폴드는 r1~r5"; exit 1 ;;
 esac
 
 SEEDS=("$@")
