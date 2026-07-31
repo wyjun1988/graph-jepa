@@ -144,6 +144,8 @@ def main():
     ap.add_argument("--seeds", nargs="+", type=int, default=[3, 5, 11, 17, 23, 29])
     ap.add_argument("--folds", nargs="+", default=["r1", "r2", "r3", "r4", "r5"])
     ap.add_argument("--prefix", default="ens_s")
+    ap.add_argument("--brief", action="store_true",
+                    help="[A] 필수 블록만 — 화면 복사가 짧아야 할 때")
     args = ap.parse_args()
 
     print("가격 패널 적재 중 …", flush=True)
@@ -167,9 +169,10 @@ def main():
                      "sh": {h: sharpe_of(exc[h], h)[0] for h in POLICIES},
                      "net": {h: sharpe_of(exc[h], h)[1] for h in POLICIES}}
         grid[fold] = {}
-        for s in sorted(maps):
-            _, e1, _ = score([maps[s]], panel, (HORIZON,))
-            grid[fold][s] = sharpe_of(e1[HORIZON], HORIZON)[0]
+        if not args.brief:      # 시드별 재채점은 [C] 격자에만 쓴다 — brief 면 건너뛴다
+            for s in sorted(maps):
+                _, e1, _ = score([maps[s]], panel, (HORIZON,))
+                grid[fold][s] = sharpe_of(e1[HORIZON], HORIZON)[0]
     if not ens:
         print("채점할 런이 없습니다.")
         return 1
@@ -179,44 +182,38 @@ def main():
         v = [x for x in v if math.isfinite(x)]
         return sum(v) / len(v) if v else float("nan")
 
-    # ══ [C] 선택 ═══════════════════════════════════════════════════════
-    print("\n" + "═" * 60)
-    print("[C] 시드 x 폴드 Sharpe 격자 (D+10) — 여유되면")
-    print("═" * 60)
-    print("seed  " + "".join(f"{f:>8}" for f in folds))
-    for s in args.seeds:
-        # 손으로 옮겨 적는 화면이다. 없는 칸은 nan 대신 점으로 — 0 으로 오독되면 안 된다.
-        cells = "".join(
-            f"{grid[f][s]:>+8.2f}" if math.isfinite(grid[f].get(s, float("nan")))
-            else f"{'.':>8}" for f in folds)
-        print(f"{s:>4}  {cells}")
-    pairs = []
-    for i in range(len(folds)):
-        for j in range(i + 1, len(folds)):
-            a, b = folds[i], folds[j]
-            common = [s for s in args.seeds
-                      if math.isfinite(grid[a].get(s, float("nan")))
-                      and math.isfinite(grid[b].get(s, float("nan")))]
-            if len(common) >= 4:
-                pairs.append(spearman([grid[a][s] for s in common],
-                                      [grid[b][s] for s in common]))
-    if pairs:
-        mp = sum(pairs) / len(pairs)
-        print(f"\n  폴드쌍 시드순위 상관 평균 : {mp:+.2f}  ({len(pairs)}쌍)")
-        print("    0 근처 → 시드운은 폴드마다 독립. r5 만 부풀려진 것이고 패널은 산다.")
-        print("    +0.5 이상 → 좋은 시드가 어디서나 좋다. 다섯 폴드가 함께 편향됐다.")
+    if not args.brief:
+        # ══ [C] 선택 ═══════════════════════════════════════════════════
+        print("\n[C] 시드 x 폴드 Sharpe 격자 (D+10) — 여유되면")
+        print("seed  " + "".join(f"{f:>8}" for f in folds))
+        for s in args.seeds:
+            # 손으로 옮겨 적는 화면이다. 빈 칸은 nan 대신 점 — 0 으로 오독되면 안 된다.
+            cells = "".join(
+                f"{grid[f][s]:>+8.2f}" if math.isfinite(grid[f].get(s, float("nan")))
+                else f"{'.':>8}" for f in folds)
+            print(f"{s:>4}  {cells}")
+        pairs = []
+        for i in range(len(folds)):
+            for j in range(i + 1, len(folds)):
+                a, b = folds[i], folds[j]
+                common = [s for s in args.seeds
+                          if math.isfinite(grid[a].get(s, float("nan")))
+                          and math.isfinite(grid[b].get(s, float("nan")))]
+                if len(common) >= 4:
+                    pairs.append(spearman([grid[a][s] for s in common],
+                                          [grid[b][s] for s in common]))
+        if pairs:
+            print(f"  폴드쌍 시드순위 상관 {sum(pairs)/len(pairs):+.2f} ({len(pairs)}쌍)"
+                  "  — 0 근처면 시드운은 폴드마다 독립")
 
-    # ══ [B] 권장 ═══════════════════════════════════════════════════════
-    print("\n" + "═" * 60)
-    print("[B] 청산정책 — 6시드 앙상블 Sharpe (41bp 차감)")
-    print("═" * 60)
-    print("정책  " + "".join(f"{f:>8}" for f in folds) + f"{'평균':>9}")
-    for h in POLICIES:
-        row = [ens[f]["sh"][h] for f in folds]
-        print(f"D+{h:<3}" + "".join(f"{v:>+8.2f}" for v in row) + f"{avg(row):>+9.2f}")
-    print("\n  연수익%: " + "  ".join(
-        f"D+{h} {avg([ens[f]['net'][h] for f in folds])*100:+.1f}" for h in POLICIES))
-    print("  D+10 은 회전 25.2회/년이라 비용만 10.3%/년이다. 늦출수록 비용이 준다.")
+        # ══ [B] 권장 ═══════════════════════════════════════════════════
+        print("\n[B] 청산정책 — 앙상블 Sharpe (41bp 차감) / 연수익%")
+        print("정책  " + "".join(f"{f:>8}" for f in folds) + f"{'평균':>8}{'연%':>8}")
+        for h in POLICIES:
+            row = [ens[f]["sh"][h] for f in folds]
+            print(f"D+{h:<3}" + "".join(f"{v:>+8.2f}" for v in row)
+                  + f"{avg(row):>+8.2f}"
+                  + f"{avg([ens[f]['net'][h] for f in folds])*100:>+8.1f}")
 
     # ══ [A] 필수 — 맨 마지막 ═══════════════════════════════════════════
     print("\n" + "█" * 60)
