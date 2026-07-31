@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
-# 4090 큐 — 헤드 입력 실험을 폴드 r4 로 확장 (2026-07-30 개정)
+# 4090 큐 — 사전등록 검정용 r3 챔프 예측 생성 (2026-07-31 개정)
 #
 # ── 왜 이걸 돌리나 ────────────────────────────────────────────────────────
-# A5000 에서 폴드 r5 로 context 모드(미래 잠재 미사용) 4시드를 돌리고 있다.
-# 4090 은 같은 실험을 폴드 r4 로 돌려 다폴드 근거를 만든다(docs §7-5 기준).
-# 기준선 ens_s3/17/29 의 r4 결과는 이미 확보돼 있어 짝지은 비교가 바로 된다.
+# docs/PREREG_FILTER_R3_20260731.md 사전등록 검정에 r3 폴드의 챔프 종목별
+# 예측이 필요하다. r3 기존 런 3개는 future_rollout.csv(일별 집계)만 있고
+# 종목별 예측이 없다 — --save-return-forecasts 는 2026-07-30 에 추가됐다.
 #
-# ── 왜 이전 큐(ema 0.99 / VICReg)를 버렸나 ────────────────────────────────
-# 그 후보들은 지평을 섞은 IC 로 순위를 매긴 결과였다. 10일 보유와 직결되는
-# 지평 10 으로 다시 재면 둘 다 챔프보다 나쁘다:
-#     챔프 +0.0549 | ema 0.99 +0.0424 (-0.8σ) | VICReg lat1 +0.0400 (-0.9σ)
-# 자세한 근거: docs/MEASUREMENT_CORRECTIONS_20260730.md
+# 이 큐가 만드는 것: ens_s3/17/29 @ r3 의 return_1d_forecasts.csv
+# 그것이 있어야 A(챔프 상위20) / C(챔프필터+Chronos) / D(Chronos 단독) 검정이 된다.
+#
+# ── 이전 큐들을 왜 버렸나 ─────────────────────────────────────────────────
+# ema 0.99 / VICReg: 지평 혼합 IC 로 매긴 순위였고, 지평 10 으로 다시 재면
+#   둘 다 챔프보다 나쁘다(-0.8σ / -0.9σ). docs/MEASUREMENT_CORRECTIONS_20260730.md
+# context 모드 x r4: r5 에서 4/4 열세(짝지은 t -3.83)로 이미 결론이 났다.
 #
 # ── 사전 준비 ────────────────────────────────────────────────────────────
 #   1) git clone git@github.com:wyjun1988/graph-jepa.git  (또는 git pull)
@@ -26,13 +28,14 @@
 #   tail -f 4090.log
 #
 # ── 끝나고 돌려줄 것 ──────────────────────────────────────────────────────
-#   reports/walk_forward/node_eval/ctx_s*_fold1_20241106_to_20250908/
+#   reports/walk_forward/node_eval/ens_s*_fold1_20240104_to_20241107/
 #     ├── future_rollout.csv          (필수)
 #     └── return_1d_forecasts.csv     (필수 — 재분석 전부 여기서 나온다)
-#   tar -czf ctx_r4_results.tar.gz \
-#     reports/walk_forward/node_eval/ctx_s*_fold1_20241106_to_20250908/{future_rollout,return_1d_forecasts}.csv
+#   tar -czf r3_results.tar.gz \
+#     reports/walk_forward/node_eval/ens_s*_fold1_20240104_to_20241107/{future_rollout,return_1d_forecasts}.csv
 #
 # 예상 소요: 3시드 x 약 35~45분 = 2시간 내외 (4090 이 A5000 보다 다소 빠름)
+# 중간에 멈춰도 안전하다 — 큐는 이미 끝난 시드를 건너뛴다.
 
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -47,7 +50,7 @@ if [ -z "$PY" ]; then
 fi
 export PY
 
-echo "════ 4090 큐: context 모드 x 폴드 r4 ════"
+echo "════ 4090 큐: 사전등록 검정용 r3 챔프 3시드 ════"
 echo "python : $PY"
 "$PY" -c "import torch;print('torch  :',torch.__version__,'| cuda',torch.cuda.is_available(),'|',torch.cuda.get_device_name(0) if torch.cuda.is_available() else '-')"
 echo ""
@@ -80,11 +83,10 @@ done
 [ "$fail" = 0 ] && echo "  데이터 OK" || { echo ""; echo "사전 점검 실패 — 중단"; exit 1; }
 echo ""
 
-PREFIX=ctx_s EXTRA="--temporal-head-input context" \
-  bash scripts/seed_queue_v2.sh 1 r4 3 17 29
+PREFIX=ens_s bash scripts/seed_queue_v2.sh 1 r3 3 17 29
 
 echo ""
 echo "════ 완료 — 아래를 압축해 돌려주세요 ════"
-ls -d reports/walk_forward/node_eval/ctx_s*_fold1_20241106_to_20250908 2>/dev/null
+ls -d reports/walk_forward/node_eval/ens_s*_fold1_20240104_to_20241107 2>/dev/null
 echo ""
-echo "tar -czf ctx_r4_results.tar.gz reports/walk_forward/node_eval/ctx_s*_fold1_20241106_to_20250908/{future_rollout,return_1d_forecasts}.csv"
+echo "tar -czf r3_results.tar.gz reports/walk_forward/node_eval/ens_s*_fold1_20240104_to_20241107/{future_rollout,return_1d_forecasts}.csv"
