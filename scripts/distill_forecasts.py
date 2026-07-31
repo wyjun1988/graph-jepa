@@ -57,7 +57,7 @@ def pearson(xs, ys):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fold", default="r3", choices=sorted(FOLDS))
-    ap.add_argument("--seeds", nargs="+", type=int, required=True)
+    ap.add_argument("--seeds", nargs="+", type=int, default=[3, 17, 29])
     ap.add_argument("--prefix", default="ens_s")
     ap.add_argument("--out", default="")
     ap.add_argument("--list", action="store_true",
