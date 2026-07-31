@@ -202,7 +202,7 @@ else
 fi
 
 echo ""
-echo "════ 종료 $(date '+%Y-%m-%d %H:%M') ════"
+echo "════ 학습 종료 $(date '+%Y-%m-%d %H:%M') ════"
 echo "── 최종 상태 ──"
 for F in $FOLD_LIST; do
   ok=0; miss=""
@@ -212,10 +212,14 @@ for F in $FOLD_LIST; do
   printf "  %-3s  %d/%s 시드%s\n" "$F" "$ok" "$(echo $ALL_SEEDS | wc -w | tr -d ' ')" \
     "$([ -n "$miss" ] && echo "  (실패:$miss)")"
 done
+
+# 파일을 빼올 수 없는 환경이다 — 숫자를 나르지 말고 결론을 나른다.
+# 그래서 분석을 여기서 끝내고, 가장 중요한 블록이 화면 맨 아래에 남게 한다.
 echo ""
-echo "── 돌려주실 것 ──"
-for F in $FOLD_LIST; do
-  [ -f "${F}_compact.csv.gz" ] && printf "  %-22s %s\n" "${F}_compact.csv.gz" "$(du -h "${F}_compact.csv.gz" | cut -f1)"
-done
+echo "════ 패널 종합 ════"
+"$PY" scripts/panel_report.py --seeds $ALL_SEEDS --folds $FOLD_LIST
+
 echo ""
-echo "  한 번에 묶기:  tar czf compact_all.tar.gz r?_compact.csv.gz"
+echo "위 [A] 블록(15개 숫자)만 적어 주시면 판정이 됩니다."
+echo "[B] 청산정책까지 주시면 비용 축소분까지 정해집니다."
+echo "다시 보려면:  $PY scripts/panel_report.py"
