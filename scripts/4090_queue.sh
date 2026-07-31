@@ -62,7 +62,7 @@ echo ""
 echo "── 사전 점검 ──"
 fail=0
 "$PY" - <<'PYEOF' || fail=1
-import sys
+import re, sys
 sys.path.insert(0, ".")
 from stock_v2.graph_jepa import StockGraphJEPA, TEMPORAL_HEAD_INPUTS
 assert "context" in TEMPORAL_HEAD_INPUTS, "graph_jepa 에 context 모드가 없다 — git pull 필요"
@@ -79,8 +79,10 @@ assert "r1) FOLD=" in q and "r2) FOLD=" in q, \
     "seed_queue_v2.sh 에 r1·r2 폴드가 없다 — git pull 필요"
 assert "--save-return-forecasts" in q, "큐에 --save-return-forecasts 가 없다"
 print("  평가 load_model 배선 · r1/r2 폴드 · 예측저장 OK")
-assert "/workspace" not in q, \
-    "seed_queue_v2.sh 에 RunPod 경로(/workspace)가 남아 있다 — git pull 필요"
+# 주석이 아니라 실제 대입문만 본다 (설명 주석에 /workspace 가 들어 있다)
+bad = [l for l in q.splitlines()
+       if not l.lstrip().startswith("#") and re.search(r"^(ROOT|PY)=/workspace", l.strip())]
+assert not bad, "seed_queue_v2.sh 에 RunPod 경로가 대입돼 있다 — git pull 필요: %s" % bad
 assert "nproc" in q, "워커 수가 코어 기반이 아니다 — git pull 필요"
 print("  RunPod 하드코딩 없음 · 워커 코어기반 OK")
 PYEOF
