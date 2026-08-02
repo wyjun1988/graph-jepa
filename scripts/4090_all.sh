@@ -177,7 +177,7 @@ echo "  사전등록(8/2, r1~r3 미관측 상태에서 등록): 주 판정 = '�
 echo "  D+15 를 5폴드 평균에서 이기고 + 최악폴드를 악화시키지 않는가."
 echo "  2폴드 사전관측치: 랭크 +1.98 vs D+15 +0.57 (r5 +1.32/+0.55, r4 +2.64/+0.60)."
 echo "  경고: SL-5% 가 같은 2폴드에서 +0.92 로 보이다 5폴드에서 죽었다. 그 재판이다."
-"$PY" scripts/rank_exit_study.py --folds $FOLDS_ALL --seeds $SEEDS_ALL 2>/dev/null | tail -24
+"$PY" scripts/rank_exit_study.py --folds $FOLDS_ALL --seeds $SEEDS_ALL 2>/dev/null | tail -30
 echo ""
 echo "╚════ S0 끝 — 여기까지가 5폴드 확정. 아래는 신규 학습 ════╝"
 
@@ -298,7 +298,7 @@ for P in $([ "$HZ_OK" = 1 ] && echo hz_s) epc_s; do
   echo ""
   echo "  ── ${P} (시드 ${SEEDS_EXP}) ──"
   "$PY" scripts/rank_exit_study.py --prefix "$P" --seeds $SEEDS_EXP \
-    --folds $FOLDS_EXP 2>/dev/null | sed -n '/랭크 청산 연구/,$p' | head -20
+    --folds $FOLDS_EXP 2>/dev/null | sed -n '/랭크 청산 연구/,$p' | head -28
 done
 echo ""
 echo "════ 종료 $(date '+%Y-%m-%d %H:%M') ════"
