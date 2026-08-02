@@ -13,6 +13,8 @@
 #  S0  CPU 판정 (즉시, GPU 무관) — r1~r3 예측이 이 머신에만 있어서 지금까지
 #      2폴드로만 봤던 것들을 5폴드로 확정한다:
 #        청산 스택(현행 vs D+15 vs SL-5%) · 손절 사전등록 · 지평 헤드 · 6시드 패널
+#        · 랭크청산 사전등록 (2026-08-02 추가 — Buy-Hold-Spread top20% 히스테리시스,
+#          섀도우 북 rankexit 과 동일 규칙. 2폴드 +1.98 vs D+15 +0.57 의 5폴드 재판)
 #  S1  보충 학습 — r5 ens_s23 (지난 배치에서 실패한 1런). 6시드 x 5폴드 완성.
 #  S2  스모크 — path-horizons 15,20 배선 확인(3에폭). 실패 시 hz 단계만 접는다.
 #  S3  실험 학습 — hz_s(지평 헤드) · epc_s(랭킹 압력) x 5폴드 x 시드 3/17/29.
@@ -98,7 +100,7 @@ q = open("scripts/seed_queue_v2.sh").read()
 assert "PREFIX" in q and "EXTRA" in q and "r1) FOLD=" in q
 for s in ("exit_tp_report", "sl_exit_study", "horizon_head_study",
           "paired_variant_report", "panel_report", "prereg_filter_test",
-          "tsfm_benchmark"):
+          "tsfm_benchmark", "rank_exit_study"):
     assert pathlib.Path(f"scripts/{s}.py").exists(), f"{s}.py 없음 — git pull"
 print("  코드 배선 OK")
 PYEOF
@@ -169,6 +171,13 @@ echo "  사전등록(8/1): 주 판정 = D+15 SL-5% 가 D+15 를 5폴드에서 �
 echo ""
 echo "──── S0-d. 지평 헤드 5폴드 (horizon_head_study) ────"
 "$PY" scripts/horizon_head_study.py --folds $FOLDS_ALL --seeds $SEEDS_ALL 2>/dev/null | tail -45
+echo ""
+echo "──── S0-e. 랭크 청산 사전등록 판정 (rank_exit_study, 2026-08-02 추가) ────"
+echo "  사전등록(8/2, r1~r3 미관측 상태에서 등록): 주 판정 = '랭크 top20% 캡30' 이"
+echo "  D+15 를 5폴드 평균에서 이기고 + 최악폴드를 악화시키지 않는가."
+echo "  2폴드 사전관측치: 랭크 +1.98 vs D+15 +0.57 (r5 +1.32/+0.55, r4 +2.64/+0.60)."
+echo "  경고: SL-5% 가 같은 2폴드에서 +0.92 로 보이다 5폴드에서 죽었다. 그 재판이다."
+"$PY" scripts/rank_exit_study.py --folds $FOLDS_ALL --seeds $SEEDS_ALL 2>/dev/null | tail -24
 echo ""
 echo "╚════ S0 끝 — 여기까지가 5폴드 확정. 아래는 신규 학습 ════╝"
 
@@ -284,6 +293,14 @@ for P in ens_s $([ "$HZ_OK" = 1 ] && echo hz_s) epc_s; do
     --folds $FOLDS_EXP 2>/dev/null | sed -n '/손절 연구/,$p' | head -20
 done
 echo ""
+echo "[A2] 랭크 청산이 모델 변형에서도 유지되는가 (2026-08-02 추가)"
+for P in $([ "$HZ_OK" = 1 ] && echo hz_s) epc_s; do
+  echo ""
+  echo "  ── ${P} (시드 ${SEEDS_EXP}) ──"
+  "$PY" scripts/rank_exit_study.py --prefix "$P" --seeds $SEEDS_EXP \
+    --folds $FOLDS_EXP 2>/dev/null | sed -n '/랭크 청산 연구/,$p' | head -20
+done
+echo ""
 echo "════ 종료 $(date '+%Y-%m-%d %H:%M') ════"
-echo "복사해 주실 것: S0-c(손절 사전등록), S5(필터 사전등록), S6 [A] 세 표."
-echo "그 세 덩어리면 채택 판정이 전부 됩니다."
+echo "복사해 주실 것: S0-c(손절), S0-e(랭크청산 사전등록), S5(필터), S6 [A]·[A2]."
+echo "그 덩어리들이면 채택 판정이 전부 됩니다."
