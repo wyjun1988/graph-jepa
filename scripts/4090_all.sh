@@ -190,7 +190,11 @@ done
 
 # ── S2: 스모크 — h15/h20 배선 ────────────────────────────────────────────
 HZ_OK=1
-if ! done_run r5 smokehz_s 17; then
+# done_run 은 future_rollout.csv 를, 아래 검증은 return_1d_forecasts.csv 를 본다.
+# 앞선 런이 전자만 남기고 죽으면 "학습은 스킵되고 검증은 실패"가 되어 hz 가
+# 이유 없이 접힌다(2026-08-03 에 실제로 의심된 경로). 검증 파일 기준으로 통일한다.
+smoke_done(){ [ -f "reports/walk_forward/node_eval/smokehz_s17_fold1_20250905_to_20260710/return_1d_forecasts.csv" ]; }
+if ! smoke_done; then
   echo ""
   echo "════ S2. 스모크: path-horizons 15,20 (3에폭) ════"
   T0=$(date +%s)
@@ -199,18 +203,35 @@ if ! done_run r5 smokehz_s 17; then
   echo "  스모크 소요: $(( ($(date +%s)-T0)/60 ))분 (본 런 시간 추정에 참고)"
 fi
 "$PY" - <<'PYEOF' || HZ_OK=0
-import csv, sys, collections
-p = "reports/walk_forward/node_eval/smokehz_s17_fold1_20250905_to_20260710/return_1d_forecasts.csv"
+import csv, sys, collections, os
+d = "reports/walk_forward/node_eval/smokehz_s17_fold1_20250905_to_20260710"
+p = f"{d}/return_1d_forecasts.csv"
 try:
     c = collections.Counter()
     with open(p, newline="") as f:
         for r in csv.DictReader(f):
             c[r["horizon"]] += 1
 except FileNotFoundError:
-    print("  ❌ 스모크 예측 파일 없음"); sys.exit(1)
+    # 2026-08-03: 여기서 그냥 "파일 없음" 만 찍고 넘어가 GPU 세션 하나를 통째로
+    # 날렸다(hz 30런이 통으로 생략됐고 왜인지도 몰랐다). 진단 재료를 남긴다.
+    print(f"  ❌ 스모크 예측 파일 없음: {p}")
+    print(f"     디렉터리 존재: {os.path.isdir(d)}"
+          + (f" | 내용: {sorted(os.listdir(d))[:8]}" if os.path.isdir(d) else ""))
+    print("     ── 스모크 학습 로그 끝부분 (ops/training/smokehz_s17_r5.log) ──")
+    try:
+        with open("ops/training/smokehz_s17_r5.log", encoding="utf-8", errors="replace") as f:
+            tail = f.read().splitlines()[-25:]
+        for line in tail:
+            print("     | " + line[:160])
+    except FileNotFoundError:
+        print("     (학습 로그도 없음 — 스모크가 시작조차 못 했다. seed_queue_v2 출력 확인)")
+    sys.exit(1)
 print("  지평 분포:", dict(sorted(c.items(), key=lambda x: int(x[0]))))
 if {"15", "20"} - set(c):
-    print("  ❌ h15/h20 행 없음 — hz 본 런 생략"); sys.exit(1)
+    print("  ❌ h15/h20 행 없음 — hz 본 런 생략")
+    print("     학습은 됐는데 평가에 h15/h20 이 안 실렸다 — evaluate_node_prediction 의")
+    print("     --horizons 전달(run_walk_forward_node_eval.py:566)을 볼 것.")
+    sys.exit(1)
 print("  ✅ h15/h20 예측 생성 확인")
 PYEOF
 [ "$HZ_OK" = 1 ] && echo "→ hz 본 런 진행" || echo "→ ⚠ hz 접음 (epc 는 계속)"
