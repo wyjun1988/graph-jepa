@@ -1092,6 +1092,14 @@ def evaluate_future_rollout(
                     "cs_rank_return_20d",
                     "volatility_20d",
                     "downside_volatility_20d",
+                    # 2026-08-03: 수급 예측을 종목별로 뽑는다. 모델은 이 값을 이미
+                    # 예측하고 있었으나(state_target_features 149개에 포함) 선택에는
+                    # 안 쓰였다. 연기금 흐름 알파 상한이 IC 0.13(동행분 제외) 로
+                    # 챔프 h10 IC 의 2배라 예측 가능성을 확인한다.
+                    # docs/PENSION_FLOW_ALPHA_20260803.md
+                    "investor_pension_flow_ratio_1d",
+                    "investor_foreign_flow_ratio_1d",
+                    "investor_institution_flow_ratio_1d",
                 )
                 optional_forecasts = {}
                 for feature_name in optional_forecast_names:
@@ -1727,6 +1735,9 @@ def main() -> None:
                 "prediction_cs_rank_return_20d",
                 "prediction_volatility_20d",
                 "prediction_downside_volatility_20d",
+                "prediction_investor_pension_flow_ratio_1d",
+                "prediction_investor_foreign_flow_ratio_1d",
+                "prediction_investor_institution_flow_ratio_1d",
             ],
         )
         return_forecast_writer.writeheader()
