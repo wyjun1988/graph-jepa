@@ -1466,6 +1466,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pretrain-task", choices=["masked", "temporal"], default="masked")
     parser.add_argument("--temporal-offset", type=int, default=None)
     parser.add_argument("--latent-rollout-steps", type=int, default=1)
+    # 2026-08-03: 수급 랭킹 손실(fr_s 실험). 기본 0.0 = 현행과 동일.
+    # docs/DESIGN_FLOW_RANK_HEAD_20260803.md
+    parser.add_argument("--flow-rank-loss-weight", type=float, default=0.0,
+                        help="지정 피처의 횡단면 순위를 직접 맞추는 보조 손실 가중")
+    parser.add_argument("--flow-rank-features",
+                        default="investor_pension_flow_ratio_1d",
+                        help="쉼표 구분. --flow-rank-loss-weight > 0 일 때만 쓰인다")
     parser.add_argument("--rollout-offsets", default="")
     parser.add_argument(
         "--rollout-loss-weights",
@@ -1619,6 +1626,11 @@ def main() -> None:
     _head_span = max(int(args.temporal_offset), 1)
     if int(getattr(args, "sequence_window", 0) or 0) > 0 and getattr(args, "global_stock_context", False):
         raise ValueError("--sequence-window does not support --global-stock-context yet")
+    args.flow_rank_features_list = [
+        name.strip() for name in str(args.flow_rank_features).split(",") if name.strip()
+    ]
+    if args.flow_rank_loss_weight > 0.0 and not args.flow_rank_features_list:
+        raise ValueError("--flow-rank-loss-weight > 0 requires --flow-rank-features")
     args.temporal_head_steps = sorted(
         {
             max(1, int(round(int(offset) * args.latent_rollout_steps / _head_span)))
@@ -2058,6 +2070,8 @@ def main() -> None:
         entry_path_correlation_loss_weight=(
             args.entry_path_correlation_loss_weight
         ),
+        flow_rank_loss_weight=args.flow_rank_loss_weight,
+        flow_rank_features=args.flow_rank_features_list,
         feature_means=features.train_mean,
         feature_stds=features.train_std,
         normalize_predictor_output=args.normalize_predictor_output,

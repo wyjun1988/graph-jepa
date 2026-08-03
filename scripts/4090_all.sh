@@ -43,6 +43,10 @@ FOLDS_EXP="${FOLDS_EXP:-r5 r4 r3 r2 r1}"
 CHRONOS="${CHRONOS:-auto}"
 HZ_EXTRA="--path-horizons 1,2,3,5,10,15,20"
 EPC_EXTRA="--entry-path-correlation-loss-weight 0.25"
+# 2026-08-03: 수급 랭킹 손실 실험(fr_s). FR=1 로 켠다 — 기본은 끔.
+# docs/DESIGN_FLOW_RANK_HEAD_20260803.md 의 3게이트 사전등록.
+FR="${FR:-0}"
+FR_EXTRA="--flow-rank-loss-weight ${FR_W:-0.25} --flow-rank-features investor_pension_flow_ratio_1d"
 
 PY="${PY:-}"
 if [ -z "$PY" ]; then
@@ -262,6 +266,8 @@ for F in $FOLDS_EXP; do
   [ "$HZ_OK" = 1 ] && PREFIX=hz_s EXTRA="$HZ_EXTRA" \
     bash scripts/seed_queue_v2.sh "$CONCURRENCY" "$F" $SEEDS_EXP
   PREFIX=epc_s EXTRA="$EPC_EXTRA" \
+    bash scripts/seed_queue_v2.sh "$CONCURRENCY" "$F" $SEEDS_EXP
+  [ "$FR" = 1 ] && PREFIX=fr_s EXTRA="$FR_EXTRA" \
     bash scripts/seed_queue_v2.sh "$CONCURRENCY" "$F" $SEEDS_EXP
 done
 

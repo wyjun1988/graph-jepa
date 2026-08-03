@@ -535,6 +535,14 @@ class StockGraphJEPA(nn.Module):
         hybrid_fast_direct: bool = False,
         return_correlation_loss_weight: float = 0.0,
         entry_path_correlation_loss_weight: float = 0.0,
+        # 2026-08-03: 수급 랭킹 손실. 상태피처를 MSE 로 복원하는 것과 별도로
+        # 지정 피처의 **횡단면 순위**를 직접 맞춘다. 근거: 실제 t+h 연기금 흐름의
+        # IC 가 +0.134(챔프 수익률신호 +0.057 의 2.3배)인데 현행 예측은 +0.112 로
+        # persistence(+0.210)에도 못 미친다 — MSE 정확도가 랭킹으로 전이되지 않았다.
+        # docs/DESIGN_FLOW_RANK_HEAD_20260803.md, PENSION_FLOW_ALPHA_20260803.md
+        # 기본 0.0 이므로 미지정 시 현행과 완전히 동일하다.
+        flow_rank_loss_weight: float = 0.0,
+        flow_rank_features: Optional[Sequence[str]] = None,
         feature_means: Optional[Sequence[float]] = None,
         feature_stds: Optional[Sequence[float]] = None,
         normalize_predictor_output: bool = False,
@@ -773,6 +781,23 @@ class StockGraphJEPA(nn.Module):
         )
         self.intraday_return_feature_index = (
             names.index("intraday_return") if "intraday_return" in names else None
+        )
+        # 수급 랭킹 손실 대상 인덱스. 없는 이름은 조용히 건너뛰지 않고 실패시킨다 —
+        # 오타로 손실이 no-op 이 되면 "돌렸는데 아무 일도 안 났다"가 된다.
+        if not math.isfinite(flow_rank_loss_weight) or flow_rank_loss_weight < 0.0:
+            raise ValueError("flow_rank_loss_weight must be finite and non-negative")
+        self.flow_rank_loss_weight = float(flow_rank_loss_weight)
+        requested_flow = tuple(flow_rank_features or ())
+        if self.flow_rank_loss_weight > 0.0:
+            if not requested_flow:
+                raise ValueError("flow rank loss requires flow_rank_features")
+            missing = [n for n in requested_flow if n not in names]
+            if missing:
+                raise ValueError(
+                    "flow_rank_features not in feature panel: " + ", ".join(missing)
+                )
+        self.flow_feature_indices = tuple(
+            names.index(n) for n in requested_flow if n in names
         )
         if self.return_correlation_loss_weight > 0.0 and not self.return_feature_indices:
             raise ValueError("return correlation loss requires return_<horizon>d features")
@@ -1254,6 +1279,40 @@ class StockGraphJEPA(nn.Module):
             valid,
             target_batch.graph_index,
         )
+
+    def _flow_rank_loss(
+        self,
+        state_pred: Tensor,
+        target_batch: GraphBatch,
+        mask: Tensor,
+    ) -> Tensor:
+        """수급 피처의 횡단면 랭킹 손실.
+
+        상태 예측(state_pred)과 목표(target_batch.node_features)는 둘 다 정규화
+        공간이고 단조변환이므로, 순위만 맞추는 이 손실에는 역정규화가 불필요하다
+        (entry_path 손실은 gap 으로 나눠 경로수익을 만들어야 해서 역정규화한다).
+        """
+        if self.flow_rank_loss_weight <= 0.0 or not self.flow_feature_indices:
+            return state_pred.new_tensor(0.0)
+        target_features = target_batch.node_features.to(
+            device=state_pred.device, dtype=state_pred.dtype
+        )
+        total = state_pred.new_tensor(0.0)
+        for index in self.flow_feature_indices:
+            prediction = state_pred[:, index]
+            target = target_features[:, index]
+            valid = (
+                mask[:, index]
+                & torch.isfinite(prediction)
+                & torch.isfinite(target)
+            )
+            total = total + self._grouped_correlation_loss(
+                prediction,
+                target,
+                valid,
+                target_batch.graph_index,
+            )
+        return total / float(len(self.flow_feature_indices))
 
     def _temporal_head_input(
         self,
@@ -2335,6 +2394,11 @@ class StockGraphJEPA(nn.Module):
             supervised_target_available,
             target_horizon=horizon,
         )
+        flow_rank_loss = self._flow_rank_loss(
+            state_pred,
+            target_batch,
+            supervised_target_available,
+        )
         downstream_auxiliary_loss = self._downstream_auxiliary_loss(
             z_context,
             z_pred,
@@ -2371,6 +2435,7 @@ class StockGraphJEPA(nn.Module):
             + self.state_loss_weight * state_loss
             + self.return_correlation_loss_weight * return_corr_loss
             + self.entry_path_correlation_loss_weight * entry_path_corr_loss
+            + self.flow_rank_loss_weight * flow_rank_loss
             + self.downstream_auxiliary_loss_weight
             * downstream_auxiliary_loss
             + self.downstream_market_loss_weight * downstream_market_loss
@@ -2607,6 +2672,11 @@ class StockGraphJEPA(nn.Module):
                 supervised_target_available,
                 target_horizon=target_horizon,
             )
+            flow_rank_loss = self._flow_rank_loss(
+                state_pred,
+                target_batch,
+                supervised_target_available,
+            )
             downstream_auxiliary_loss = self._downstream_auxiliary_loss(
                 z_context,
                 z_pred_for_step,
@@ -2641,6 +2711,7 @@ class StockGraphJEPA(nn.Module):
                 + self.state_loss_weight * state_loss
                 + self.return_correlation_loss_weight * return_corr_loss
                 + self.entry_path_correlation_loss_weight * entry_path_corr_loss
+            + self.flow_rank_loss_weight * flow_rank_loss
                 + self.downstream_auxiliary_loss_weight
                 * downstream_auxiliary_loss
                 + self.downstream_market_loss_weight * downstream_market_loss
