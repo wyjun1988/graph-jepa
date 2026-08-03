@@ -159,8 +159,8 @@ def main():
     panel = load_prices()
     uni = universe_daily_returns(panel)
 
-    # (fold, 표, 행, 열) -> Sharpe
-    A, B = {}, {}
+    # (fold, 행, 보유) -> Sharpe.  C 는 2x2 교차, LV 는 그 셀의 절대 변동성 수준.
+    A, B, C, LV = {}, {}, {}, {}
     seed_n = {}
     for fold in args.folds:
         ens, n = load_ens(fold, args.seeds, args.prefix)
@@ -211,16 +211,30 @@ def main():
                     continue
                 ex = [x[1] for x in rows]
                 buckets["전체"].append(sum(ex) / len(ex))
+                regime = None
                 if dt in zs:
-                    key = "고변동 국면" if zs[dt] >= zmed else "저변동 국면"
-                    buckets[key].append(sum(ex) / len(ex))
+                    regime = "고국면" if zs[dt] >= zmed else "저국면"
+                    label = "고변동 국면" if regime == "고국면" else "저변동 국면"
+                    buckets[label].append(sum(ex) / len(ex))
                 # 종목 변동성 분할 — 코호트 내 중앙값
                 rows.sort(key=lambda x: x[2])
                 half = len(rows) // 2
                 lo, hi = rows[:half], rows[half:]
                 if len(lo) >= MIN_OBS and len(hi) >= MIN_OBS:
-                    sbuck["저변동 종목"].append(sum(x[1] for x in lo) / len(lo))
-                    sbuck["고변동 종목"].append(sum(x[1] for x in hi) / len(hi))
+                    lo_ex = sum(x[1] for x in lo) / len(lo)
+                    hi_ex = sum(x[1] for x in hi) / len(hi)
+                    sbuck["저변동 종목"].append(lo_ex)
+                    sbuck["고변동 종목"].append(hi_ex)
+                    # [C] 2x2 교차 — 시장 국면 안에서 종목 변동성을 본다.
+                    # 같은 "고변동 종목" 이라도 어느 국면에서인지에 따라 다른 물건이다.
+                    if regime:
+                        C.setdefault((fold, f"{regime}·저종목", h), []).append(lo_ex)
+                        C.setdefault((fold, f"{regime}·고종목", h), []).append(hi_ex)
+                        # 절대 변동성 수준도 남긴다(교락 확인용)
+                        LV.setdefault((fold, f"{regime}·저종목"), []).append(
+                            sum(x[2] for x in lo) / len(lo))
+                        LV.setdefault((fold, f"{regime}·고종목"), []).append(
+                            sum(x[2] for x in hi) / len(hi))
             for k, v in buckets.items():
                 r = sharpe(v, h)
                 if r:
@@ -229,6 +243,9 @@ def main():
                 r = sharpe(v, h)
                 if r:
                     B[(fold, k, h)] = r
+            for key in [k for k in C if k[0] == fold and k[2] == h]:
+                r = sharpe(C[key], h)
+                C[key] = r if r else None
 
     folds = [f for f in args.folds if any(x[0] == f for x in A)]
 
@@ -262,6 +279,22 @@ def main():
           "[B] 종목 층위 — 코호트 내 종목변동성 x 보유기간 (Sharpe)",
           "판정: 저변동 종목이 긴 보유에서, 고변동 종목이 짧은 보유에서 상대우위면\n"
           "      가설 지지 → 종목별로 청산일을 달리할 근거가 된다.")
+    table(C, ["저국면·저종목", "저국면·고종목", "고국면·저종목", "고국면·고종목"],
+          "[C] 2x2 교차 — 시장 국면 x 종목변동성 x 보유기간 (Sharpe)",
+          "판정: 같은 '고변동 종목' 도 국면에 따라 다른 물건인가.\n"
+          "      국면별로 최적 보유가 갈리면 청산을 국면x종목으로 조건화할 근거다.")
+
+    print("\n" + "=" * 78)
+    print("[참고] 각 셀의 평균 절대 변동성 (교락 확인 — 상대순위 분할의 한계)")
+    print("=" * 78)
+    for f in folds:
+        cells = []
+        for r in ["저국면·저종목", "저국면·고종목", "고국면·저종목", "고국면·고종목"]:
+            v = LV.get((f, r))
+            cells.append(f"{r} {sum(v)/len(v)*100:.2f}%" if v else f"{r} .")
+        print(f"  {f}: " + " | ".join(cells))
+    print("  * '저국면·고종목' 과 '고국면·저종목' 의 절대 수준이 겹치면,")
+    print("    코호트 내 상대순위 분할이 절대 변동성을 대변하지 못한다는 뜻이다.")
     return 0
 
 
