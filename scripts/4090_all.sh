@@ -100,7 +100,7 @@ q = open("scripts/seed_queue_v2.sh").read()
 assert "PREFIX" in q and "EXTRA" in q and "r1) FOLD=" in q
 for s in ("exit_tp_report", "sl_exit_study", "horizon_head_study",
           "paired_variant_report", "panel_report", "prereg_filter_test",
-          "tsfm_benchmark", "rank_exit_study"):
+          "tsfm_benchmark", "rank_exit_study", "vol_deploy_study"):
     assert pathlib.Path(f"scripts/{s}.py").exists(), f"{s}.py 없음 — git pull"
 print("  코드 배선 OK")
 PYEOF
@@ -178,6 +178,17 @@ echo "  D+15 를 5폴드 평균에서 이기고 + 최악폴드를 악화시키�
 echo "  2폴드 사전관측치: 랭크 +1.98 vs D+15 +0.57 (r5 +1.32/+0.55, r4 +2.64/+0.60)."
 echo "  경고: SL-5% 가 같은 2폴드에서 +0.92 로 보이다 5폴드에서 죽었다. 그 재판이다."
 "$PY" scripts/rank_exit_study.py --folds $FOLDS_ALL --seeds $SEEDS_ALL 2>/dev/null | tail -30
+echo ""
+echo "──── S0-f. 배분조절 사전등록 판정 (vol_deploy_study, 2026-08-03 추가) ────"
+echo "  사전등록(8/3, r1~r3 미관측): 주판정 = 프로덕션 K=+0.3 이 '고정(m=1)' 을"
+echo "  5폴드 평균에서 이기는가. 부판정 = K<0(역방향)이 고정을 이기는가."
+echo "  2폴드 사전관측치: K+0.3 은 두 청산 모두에서 고정에 짐"
+echo "  (D+15 0.43<0.57, rank20 1.42<1.98). K 증가에 따라 4개 조합 전부 단조 악화."
+for X in d15 rank20; do
+  echo ""
+  echo "  ── 청산=${X} ──"
+  "$PY" scripts/vol_deploy_study.py --exit "$X" --folds $FOLDS_ALL --seeds $SEEDS_ALL 2>/dev/null | tail -20
+done
 echo ""
 echo "╚════ S0 끝 — 여기까지가 5폴드 확정. 아래는 신규 학습 ════╝"
 
