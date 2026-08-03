@@ -187,7 +187,16 @@ def main():
     ap.add_argument("--folds", nargs="+", default=["r5", "r4"])
     ap.add_argument("--seeds", nargs="+", type=int, default=[3, 5, 11, 17, 23, 29])
     ap.add_argument("--prefix", default="ens_s")
+    ap.add_argument("--widths", default="",
+                    help="폭 정밀 스윕(%%, 쉼표구분). 예: 15,16,...,25. 주면 랭크 정책을 "
+                         "이 폭들(h10/h10, 캡30)로 대체한다 — 큐 기본 출력은 그대로 두고 "
+                         "해상도만 올릴 때 쓴다.")
     args = ap.parse_args()
+
+    global RANK_POLICIES
+    if args.widths:
+        ws = [int(w) for w in args.widths.replace(" ", "").split(",") if w]
+        RANK_POLICIES = [(f"랭크{w}%", "h10", "h10", w / 100.0, 30) for w in ws]
 
     print("가격 패널 적재 중 …", flush=True)
     panel = load_prices()
