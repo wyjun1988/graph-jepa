@@ -100,7 +100,8 @@ q = open("scripts/seed_queue_v2.sh").read()
 assert "PREFIX" in q and "EXTRA" in q and "r1) FOLD=" in q
 for s in ("exit_tp_report", "sl_exit_study", "horizon_head_study",
           "paired_variant_report", "panel_report", "prereg_filter_test",
-          "tsfm_benchmark", "rank_exit_study", "vol_deploy_study"):
+          "tsfm_benchmark", "rank_exit_study", "vol_deploy_study",
+          "vol_holding_interaction_study"):
     assert pathlib.Path(f"scripts/{s}.py").exists(), f"{s}.py 없음 — git pull"
 print("  코드 배선 OK")
 PYEOF
@@ -189,6 +190,13 @@ for X in d15 rank20; do
   echo "  ── 청산=${X} ──"
   "$PY" scripts/vol_deploy_study.py --exit "$X" --folds $FOLDS_ALL --seeds $SEEDS_ALL 2>/dev/null | tail -20
 done
+echo ""
+echo "──── S0-g. 변동성x보유기간 사전등록 판정 (vol_holding_interaction_study) ────"
+echo "  사전등록(8/3, r1~r3 미관측): 주판정 = [B] 고변동 종목의 최적 보유가"
+echo "  저변동 종목보다 짧고, 폴드별로도 방향이 일관되는가."
+echo "  부판정 = [A] 고변동 국면 최고 Sharpe 가 저변동 국면보다 낮은가."
+echo "  2폴드: 평균은 가설대로(고변동 D+5 정점 / 저변동 D+15 정점)지만 r5·r4 가 정반대."
+"$PY" scripts/vol_holding_interaction_study.py --folds $FOLDS_ALL --seeds $SEEDS_ALL 2>/dev/null | sed -n '/\[A\] 국면/,$p'
 echo ""
 echo "╚════ S0 끝 — 여기까지가 5폴드 확정. 아래는 신규 학습 ════╝"
 
