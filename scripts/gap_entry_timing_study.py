@@ -49,14 +49,23 @@ HOLD = 15
 GAP_SKIP = 0.05                       # 프로덕션과 동일: |갭|>5% 는 진입 자체를 스킵
 
 # (라벨, 갭하락 임계, 지연방식)  갭 <= -임계 인 종목에만 적용
+#   limit<할인>_<미체결처리>  예: limit10_skip = 시가-1.0%, 미체결이면 포기
 POLICIES = [
     ("시가 전량 (현행)",              None,  None),
     ("갭≤-1% → 당일종가",            0.01,  "close_t1"),
     ("갭≤-2% → 당일종가",            0.02,  "close_t1"),
     ("갭≤-3% → 당일종가",            0.03,  "close_t1"),
     ("갭≤-2% → 익일시가",            0.02,  "open_t2"),
-    ("갭≤-2% → 시가-1%/미체결 종가",   0.02,  "limit_dn"),
     ("갭≤-2% → 아예 스킵",           0.02,  "skip"),
+    # ── 갭하락 조건부 지정가 (2026-08-06 사용자 재질의) ──
+    ("갭≤-1% → 지정-1%/포기",        0.01,  "limit10_skip"),
+    ("갭≤-2% → 지정-1%/포기",        0.02,  "limit10_skip"),
+    ("갭≤-3% → 지정-1%/포기",        0.03,  "limit10_skip"),
+    ("갭≤-2% → 지정-0.5%/포기",      0.02,  "limit05_skip"),
+    ("갭≤-2% → 지정-2%/포기",        0.02,  "limit20_skip"),
+    ("갭≤-1% → 지정-1%/종가",        0.01,  "limit10_close"),
+    ("갭≤-2% → 지정-1%/종가",        0.02,  "limit10_close"),
+    ("갭≤-3% → 지정-1%/종가",        0.03,  "limit10_close"),
 ]
 
 
@@ -193,9 +202,17 @@ def main():
                         if i + 2 >= len(ds) or o[i + 2] <= 0:
                             continue
                         price = o[i + 2]
-                    else:                          # limit_dn
-                        lim = o[i + 1] * 0.99
-                        price = lim if lo[i + 1] <= lim else c[i + 1]
+                    elif mode.startswith("limit"):
+                        disc = int(mode[5:7]) / 1000.0     # limit10 -> 0.010
+                        lim = o[i + 1] * (1.0 - disc)
+                        if lo[i + 1] <= lim:               # 낙관적 체결 가정
+                            price = lim
+                        elif mode.endswith("_close"):
+                            price = c[i + 1]
+                        else:                              # _skip: 미체결 포기
+                            continue
+                    else:
+                        continue
                     pos.append(exit_px / price - 1.0 - bench[dt])
                 if len(pos) >= K_PICKS // 3:
                     daily.append(sum(pos) / len(pos))
