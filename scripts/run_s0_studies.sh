@@ -45,6 +45,11 @@ done
 run "S0-g. 변동성x보유 2x2 사전등록 (2026-08-03)" "vol_holding" \
   "$PY" scripts/vol_holding_interaction_study.py --folds $F --seeds $S
 
+run "S0-h. 물타기 사전등록 (2026-08-06)" "scale_in" \
+  "$PY" scripts/scale_in_study.py --folds $F --seeds $S
+run "S0-i. 갈아타기 사전등록 (2026-08-06)" "switch" \
+  "$PY" scripts/switch_study.py --folds $F --seeds $S
+
 # fr_s(수급 랭킹 손실)가 학습돼 있으면 게이트 1 도 함께 판정한다.
 if ls reports/walk_forward/node_eval/fr_s* >/dev/null 2>&1; then
   say ""

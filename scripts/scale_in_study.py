@@ -298,8 +298,12 @@ def main():
         import json as _json
         Path(args.json).write_text(_json.dumps({
             "study": "scale_in", "folds": folds, "seeds": seed_n,
-            "rows": {label: {f: res[(f, label)][0] for f in folds if (f, label) in res}
+            # 주판정 지표는 **정책일치 벤치 기준**(res[..][1])이다.
+            # 사용자본 기준은 선택효과가 남아 부풀려지므로 판정에 쓰지 않는다.
+            "rows": {label: {f: res[(f, label)][1] for f in folds if (f, label) in res}
                      for label, *_ in POLICIES},
+            "rows_reserve": {label: {f: res[(f, label)][2] for f in folds if (f, label) in res}
+                             for label, *_ in POLICIES},
         }, ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"[json] {args.json}")
     return 0

@@ -56,15 +56,19 @@ GAP_SKIP = 0.05
 MAX_SWITCH = 3          # 포지션당 교체 상한 (비용 폭주 방지)
 
 # (라벨, 종류, 파라미터…)
+# (라벨, 종류, 파라미터, 집중허용도)
 POLICIES = [
-    ("현행 (교체 없음)",              "none",   None),
-    ("top20 이탈→top10 교체",        "top",    (0.20, 0.10)),
-    ("top30 이탈→top10 교체",        "top",    (0.30, 0.10)),
-    ("스코어격차 0.5σ 이상 교체",       "score",  0.5),
-    ("스코어격차 1.0σ 이상 교체",       "score",  1.0),
-    ("평탄(|수익|<2%)+격차1.0σ",       "flat",   (0.02, 1.0)),
-    ("평탄(|수익|<3%)+격차0.5σ",       "flat",   (0.03, 0.5)),
-    ("평탄(|수익|<3%)+top20이탈",      "flattop", (0.03, 0.20)),
+    ("현행 (교체 없음)",              "none",   None,        1),
+    ("top20 이탈→top10 (중복금지)",   "top",    (0.20, 0.10), 1),
+    ("top30 이탈→top10 (중복금지)",   "top",    (0.30, 0.10), 1),
+    # ── 집중 허용 (2026-08-06 사용자 반론: 계속 좋으면 몰려도 되지 않나) ──
+    ("top20→top10 (중복 2까지)",     "top",    (0.20, 0.10), 2),
+    ("top20→top10 (중복 3까지)",     "top",    (0.20, 0.10), 3),
+    ("top20→top10 (중복 무제한)",     "top",    (0.20, 0.10), 99),
+    ("top30→top10 (중복 3까지)",     "top",    (0.30, 0.10), 3),
+    ("top30→top10 (중복 무제한)",     "top",    (0.30, 0.10), 99),
+    ("스코어격차 1.0σ (중복 무제한)",   "score",  1.0,         99),
+    ("평탄(|수익|<3%)+격차0.5σ",       "flat",   (0.03, 0.5),  1),
 ]
 
 
@@ -122,7 +126,8 @@ def zmap(scores):
     return {k: ((v - m) / s if s > 0 else 0.0) for k, v in scores.items()}
 
 
-def simulate(t0, dt, panel, sig_dates, zs, tops, kind, param, held_by_day):
+def simulate(t0, dt, panel, sig_dates, zs, tops, kind, param, held_by_day,
+             max_dup=1):
     """한 포지션의 (비용차감 총수익, 교체횟수) 또는 None.
 
     코호트 만기는 D+15 로 고정한다(교체해도 연장 없음) — 그래야 자본 회전이
@@ -172,12 +177,13 @@ def simulate(t0, dt, panel, sig_dates, zs, tops, kind, param, held_by_day):
                 continue
 
         # 2) 대체 후보 — 그날 최상위 중 미보유·데이터 있는 것
-        # ⚠️ 코호트가 **현재 보유 중인 전 종목**을 제외한다. 초기 35픽을 빼지
-        # 않으면 여러 포지션이 같은 최상위 종목으로 몰려 집중도가 폭증한다
-        # (35종목 분산 포트폴리오라는 전제가 깨진다).
+        # 집중 허용도(max_dup)는 **가정이 아니라 정책 파라미터**다.
+        #   1  = 중복 금지(35종목 분산 유지)
+        #   >1 = 같은 종목을 최대 max_dup 슬롯까지 겹쳐 보유 허용
+        #   99 = 무제한 — "계속 좋게 평가되면 몰려도 된다"는 가설의 극단
         best, best_z = None, None
         for cand, cz in sorted(z.items(), key=lambda kv: -kv[1])[:60]:
-            if cand == cur or cand in held_by_day:
+            if cand == cur or held_by_day.get(cand, 0) >= max_dup:
                 continue
             r2 = panel.get(cand)
             if r2 is None:
@@ -202,8 +208,10 @@ def simulate(t0, dt, panel, sig_dates, zs, tops, kind, param, held_by_day):
         # 4) 체결 — 현재 종가 매도 → 후보 종가 매수
         legs.append(px_now / cur_px - 1.0)
         r2 = panel.get(best)
-        held_by_day.discard(cur)          # 판 종목은 보유에서 뺀다
-        held_by_day.add(best)             # 산 종목을 보유에 넣는다
+        held_by_day[cur] = held_by_day.get(cur, 1) - 1      # 판 종목 슬롯 반환
+        if held_by_day[cur] <= 0:
+            held_by_day.pop(cur, None)
+        held_by_day[best] = held_by_day.get(best, 0) + 1    # 산 종목 슬롯 점유
         cur, cur_px = best, r2[2][r2[3][day]]
         switches += 1
 
@@ -263,13 +271,13 @@ def main():
             if len(vals) >= 50:
                 bench[dt] = sum(vals) / len(vals)
 
-        for label, kind, param in POLICIES:
-            daily, sw_tot, pos_tot = [], 0, 0
+        for label, kind, param, mdup in POLICIES:
+            daily, sw_tot, pos_tot, conc = [], 0, 0, []
             for dt, pk in picks.items():
                 if dt not in bench:
                     continue
                 # 코호트의 현재 보유 집합 — 초기 35픽으로 시작한다
-                held = set(pk)
+                held = {t: 1 for t in pk}
                 ex = []
                 for t in pk:
                     rec = panel.get(t)
@@ -282,7 +290,7 @@ def main():
                     if abs(o[i + 1] / c[i] - 1.0) > GAP_SKIP:
                         continue
                     r = simulate(t, dt, panel, sig_dates, zs, tops,
-                                 kind, param, held)
+                                 kind, param, held, mdup)
                     if r is None:
                         continue
                     ret, sw = r
@@ -290,14 +298,16 @@ def main():
                     sw_tot += sw; pos_tot += 1
                 if len(ex) >= K_PICKS // 3:
                     daily.append(sum(ex) / len(ex))
+                    conc.append(max(held.values()) if held else 1)
             if len(daily) < 20:
                 continue
             mu = sum(daily) / len(daily)
             sd = statistics.stdev(daily)
             turns = TRADING_DAYS / HOLD
             res[(fold, label)] = (mu / sd * math.sqrt(turns) if sd > 0 else float("nan"),
-                                  mu * turns * 100,
-                                  sw_tot / pos_tot if pos_tot else 0.0)
+                                  sd * math.sqrt(turns) * 100,
+                                  sw_tot / pos_tot if pos_tot else 0.0,
+                                  sum(conc) / len(conc) if conc else 1.0)
 
     folds = [f for f in args.folds if any(k[0] == f for k in res)]
     print("\n" + "=" * 82)
@@ -307,7 +317,7 @@ def main():
     print("=" * 82)
     hdr = f"{'정책':<26}"
     for f in folds:
-        hdr += f"{f+' Sh':>9}{f+' 연%':>8}{'교체/건':>8}"
+        hdr += f"{f+' Sh':>9}{f+' 변동%':>8}{'교체':>6}{'최대집중':>8}"
     print(hdr + f"{'평균Sh':>9}")
     print("-" * 82)
     for label, *_ in POLICIES:
@@ -315,14 +325,15 @@ def main():
         for f in folds:
             r = res.get((f, label))
             if r:
-                cells += f"{r[0]:>+9.2f}{r[1]:>+8.1f}{r[2]:>8.2f}"
+                cells += f"{r[0]:>+9.2f}{r[1]:>8.1f}{r[2]:>6.2f}{r[3]:>8.1f}"
                 shs.append(r[0])
             else:
-                cells += f"{'.':>9}{'.':>8}{'.':>8}"
+                cells += f"{'.':>9}{'.':>8}{'.':>6}{'.':>8}"
         if shs:
             print(f"{label:<26}{cells}{sum(shs)/len(shs):>+9.2f}")
-    print("\n교체/건 = 포지션당 평균 교체 횟수. 교체 1회마다 41bp 를 더 낸다.")
-    print("현행(교체 없음)을 넘어야 '바꿀 기회에 바꾸는 것' 에 값이 있다.")
+    print("\n변동% = 연환산 변동성. 최대집중 = 코호트당 한 종목 최대 보유 슬롯수(1=분산).")
+    print("Sharpe 는 위험조정 후이므로 집중이 이득이면 여기서 이겨야 한다 —")
+    print("집중으로 수익만 커지고 변동성이 같이 커지면 Sharpe 는 안 오른다.")
     if args.json:
         import json as _json
         Path(args.json).write_text(_json.dumps({

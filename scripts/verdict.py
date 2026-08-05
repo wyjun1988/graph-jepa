@@ -35,6 +35,18 @@ PREREG = {
         "date": "2026-08-03",
         "obs2": "2폴드 사전관측 저국면·고종목 D+5 정점 / 저국면·저종목 D+15 정점",
     },
+    "scale_in": {
+        "date": "2026-08-06",
+        "main": "scale_up -5% / 5일",   # = half_half -5%/5일 (자본정규화 후 동일)
+        "base": "시가 1회 (현행)",
+        "obs2": "2폴드 사전관측 예약자본 +0.93 / 정책일치벤치 +0.83 vs 현행 +0.60",
+    },
+    "switch": {
+        "date": "2026-08-06",
+        "main": "top30→top10 (중복 3까지)",
+        "base": "현행 (교체 없음)",
+        "obs2": "2폴드 사전관측 +1.28 vs +0.60. 단 변동성이 3배(12~18% -> 42~52%)",
+    },
 }
 MIN_FOLDS_FOR_ADOPT = 5      # 5폴드 미만이면 '승급'까지만
 
@@ -157,6 +169,34 @@ def verdict_vol_holding(data, out):
     out.append(("", "", f"저국면 셀 평균 {mean(lows):+.2f} — 양수면 저변동 국면에서만 전략이 먹는다"))
 
 
+def verdict_simple(data, out, key, name):
+    """평균 + 최악폴드 + 폴드일관 3게이트 (랭크청산과 동일 기준)."""
+    pr = PREREG[key]
+    rows, folds = data["rows"], data["folds"]
+    main, base = rows.get(pr["main"], {}), rows.get(pr["base"], {})
+    if not main or not base:
+        out.append((name, "판정불가", "주판정/기준 행 없음"))
+        return
+    mm, bm = mean(main.values()), mean(base.values())
+    pairs = [f for f in folds if f in main and f in base]
+    wins = [f for f in pairs if main[f] > base[f]]
+    wm, wb = min(main.values()), min(base.values())
+    n = len(folds)
+    if mm > bm and wm >= wb and len(wins) == len(pairs) and n >= MIN_FOLDS_FOR_ADOPT:
+        v, why = "채택권고", f"평균·최악폴드·전폴드일관 통과 ({n}폴드)"
+    elif mm > bm and wm >= wb and n >= MIN_FOLDS_FOR_ADOPT:
+        v, why = "조건부채택", f"평균·최악폴드 통과, 폴드일관 {len(wins)}/{len(pairs)}"
+    elif mm > bm and n >= MIN_FOLDS_FOR_ADOPT:
+        v, why = "보류", f"평균 우세이나 최악폴드 악화 ({wm:+.2f} < {wb:+.2f})"
+    elif mm > bm:
+        v, why = "승급", f"{n}폴드 평균 우세 — 5폴드 확인 필요"
+    else:
+        v, why = "기각", f"평균 미달 ({mm:+.2f} <= {bm:+.2f})"
+    out.append((name, v, why))
+    out.append(("", "", f"주판정 {mm:+.2f} vs 기준 {bm:+.2f} | "
+                       f"최악폴드 {wm:+.2f} vs {wb:+.2f} | 우세 {len(wins)}/{len(pairs)}폴드"))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", required=True, help="스터디가 --json 으로 뱉은 디렉터리")
@@ -177,6 +217,11 @@ def main():
     if d:
         n_folds = n_folds or len(d["folds"])
         verdict_vol_holding(d, out)
+    for key, nm in (("scale_in", "물타기"), ("switch", "갈아타기")):
+        d = load(args.dir, key)
+        if d:
+            n_folds = n_folds or len(d["folds"])
+            verdict_simple(d, out, key, nm)
 
     if not out:
         print("판정할 JSON 이 없다. 스터디를 --json 으로 먼저 돌려라.")
