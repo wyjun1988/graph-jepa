@@ -153,6 +153,7 @@ def main():
     ap.add_argument("--folds", nargs="+", default=["r5", "r4"])
     ap.add_argument("--seeds", nargs="+", type=int, default=[3, 5, 11, 17, 23, 29])
     ap.add_argument("--prefix", default="ens_s")
+    ap.add_argument("--json", default="", help="판정기용 결과 JSON 경로")
     args = ap.parse_args()
 
     print("가격 패널 적재 중 …", flush=True)
@@ -293,6 +294,19 @@ def main():
             v = LV.get((f, r))
             cells.append(f"{r} {sum(v)/len(v)*100:.2f}%" if v else f"{r} .")
         print(f"  {f}: " + " | ".join(cells))
+    if args.json:
+        import json as _json
+        def dump(store):
+            out = {}
+            for (f, r, h), v in store.items():
+                if v:
+                    out.setdefault(r, {}).setdefault(f, {})[str(h)] = v[0]
+            return out
+        Path(args.json).write_text(_json.dumps({
+            "study": "vol_holding", "folds": folds, "seeds": seed_n, "holds": HOLDS,
+            "regime": dump(A), "stock": dump(B), "cross": dump(C),
+        }, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"[json] {args.json}")
     print("  * '저국면·고종목' 과 '고국면·저종목' 의 절대 수준이 겹치면,")
     print("    코호트 내 상대순위 분할이 절대 변동성을 대변하지 못한다는 뜻이다.")
     return 0

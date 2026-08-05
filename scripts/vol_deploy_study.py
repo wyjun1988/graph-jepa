@@ -187,6 +187,7 @@ def main():
     ap.add_argument("--folds", nargs="+", default=["r5", "r4"])
     ap.add_argument("--seeds", nargs="+", type=int, default=[3, 5, 11, 17, 23, 29])
     ap.add_argument("--prefix", default="ens_s")
+    ap.add_argument("--json", default="", help="판정기용 결과 JSON 경로")
     ap.add_argument("--exit", default="d15", choices=["d15", "d20", "rank20"],
                     help="배분 조절을 얹을 청산 규칙 (기본 d15 = 채택안)")
     args = ap.parse_args()
@@ -295,6 +296,14 @@ def main():
                 cells += f"{'.':>8}{'.':>8}{'.':>8}"
         if shs:
             print(f"{label:<22}{cells}{sum(shs)/len(shs):>+8.2f}")
+    if args.json:
+        import json as _json
+        Path(args.json).write_text(_json.dumps({
+            "study": "vol_deploy", "exit": args.exit, "folds": folds, "seeds": seed_n,
+            "rows": {label: {f: res[(f, label)][0] for f in folds if (f, label) in res}
+                     for label, *_ in POLICIES},
+        }, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"[json] {args.json}")
     print("\n판정: '고정 (m=1)' 을 넘어야 배분 조절이 값어치가 있다.")
     print("      K 부호가 뒤집히면(K<0 이 이기면) '고변동성에 더 싣는다' 는 전제가 틀린 것이다.")
     return 0

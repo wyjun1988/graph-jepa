@@ -187,6 +187,7 @@ def main():
     ap.add_argument("--folds", nargs="+", default=["r5", "r4"])
     ap.add_argument("--seeds", nargs="+", type=int, default=[3, 5, 11, 17, 23, 29])
     ap.add_argument("--prefix", default="ens_s")
+    ap.add_argument("--json", default="", help="판정기용 결과 JSON 경로")
     ap.add_argument("--widths", default="",
                     help="폭 정밀 스윕(%%, 쉼표구분). 예: 15,16,...,25. 주면 랭크 정책을 "
                          "이 폭들(h10/h10, 캡30)로 대체한다 — 큐 기본 출력은 그대로 두고 "
@@ -295,6 +296,14 @@ def main():
     print("\n판정: 주판정 = '랭크20 h10/h10' vs 'D+15 (채택안)' (사전등록 2026-08-02).")
     print("      exit-h5/mean·in&out-mean 은 탐색 — 주판정과 별도로 읽는다.")
     print("      최악폴드 악화 금지 게이트는 5폴드에서만 확정.")
+    if args.json:
+        import json as _json
+        Path(args.json).write_text(_json.dumps({
+            "study": "rank_exit", "folds": folds, "seeds": seed_n,
+            "rows": {label: {f: res[(f, label)][0] for f in folds if (f, label) in res}
+                     for label in all_pol},
+        }, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"[json] {args.json}")
     return 0
 
 
