@@ -47,6 +47,12 @@ PREREG = {
         "base": "고정 (현행)",
         "obs2": "2폴드 사전관측 +0.83 vs +0.60, 2/2. 시장변동성 버전은 5폴드 마진 +0.05",
     },
+    "combined": {
+        "date": "2026-08-06",
+        "main": "전부 (guard)",
+        "base": "랭크청산만",     # ⚠️ 기준선은 현행이 아니라 개별 최고다
+        "obs2": "2폴드 사전관측 +2.47 vs 랭크청산 +1.92 (현행 +0.60). 가산성 98%",
+    },
     "switch": {
         "date": "2026-08-06",
         "main": "top30→top10 (중복 3까지)",
@@ -224,7 +230,7 @@ def main():
         n_folds = n_folds or len(d["folds"])
         verdict_vol_holding(d, out)
     for key, nm in (("scale_in", "물타기"), ("switch", "갈아타기"),
-                    ("signal_scaling", "신호강도조절")):
+                    ("signal_scaling", "신호강도조절"), ("combined", "결합전략")):
         d = load(args.dir, key)
         if d:
             n_folds = n_folds or len(d["folds"])

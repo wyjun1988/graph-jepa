@@ -53,6 +53,9 @@ run "S0-i. 갈아타기 사전등록 (2026-08-06)" "switch" \
 run "S0-j. 신호강도 조절 사전등록 (2026-08-06)" "signal_scaling" \
   "$PY" scripts/signal_scaling_study.py --folds $F --seeds $S
 
+run "S0-k. 결합전략 사전등록 (2026-08-06)" "combined" \
+  "$PY" scripts/combined_strategy_study.py --folds $F --seeds $S
+
 # fr_s(수급 랭킹 손실)가 학습돼 있으면 게이트 1 도 함께 판정한다.
 if ls reports/walk_forward/node_eval/fr_s* >/dev/null 2>&1; then
   say ""
