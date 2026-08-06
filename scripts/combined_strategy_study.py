@@ -63,6 +63,7 @@ RANK_BAND = 0.20            # 랭크청산 보유 밴드
 ADD_DROP, ADD_WIN = 0.05, 5  # 물타기: -5% / 5일
 SIG_K, SIG_LO, SIG_HI = 0.6, 0.2, 2.0
 GUARD_DAYS = 3              # 추가매수 후 랭크청산 유예
+TARGET_VOL = 15.0           # 위험 고정 비교용 목표 연변동성(%)
 
 # (라벨, 랭크청산, 물타기, 예산조절, 충돌가드)
 POLICIES = [
@@ -271,8 +272,14 @@ def main():
             sd = statistics.stdev(daily)
             # 회전도 실측 보유일로 — 짧게 들면 더 자주 돈다
             turns = TRADING_DAYS / (sum(holds) / len(holds))
-            res[(fold, label)] = (mu / sd * math.sqrt(turns) if sd > 0 else float("nan"),
-                                  mu * turns * 100, sum(holds) / len(holds))
+            sh = mu / sd * math.sqrt(turns) if sd > 0 else float("nan")
+            vol = sd * math.sqrt(turns) * 100          # 연환산 변동성
+            # ⚠️ 같은 자본·같은 위험으로 비교하려면 변동성을 맞춰야 한다.
+            # 놀리는 현금은 낭비가 아니라 변동성을 줄이는 일을 한다 — 그만큼
+            # 포지션을 키워 목표 변동성에 맞추면 그 이득이 수익으로 환산된다.
+            # 목표 변동성 수익 = Sharpe x 목표변동성 (여기서는 15%).
+            res[(fold, label)] = (sh, mu * turns * 100, sum(holds) / len(holds),
+                                  vol, sh * TARGET_VOL)
 
     folds = [f for f in args.folds if any(x[0] == f for x in res)]
     print("\n" + "=" * 78)
@@ -281,7 +288,7 @@ def main():
     print("=" * 78)
     hdr = f"{'정책':<24}"
     for f in folds:
-        hdr += f"{f+' Sh':>10}{f+' 연%':>9}{'보유':>6}"
+        hdr += f"{f+' Sh':>9}{'변동%':>7}{'그대로%':>8}{'위험고정%':>9}"
     print(hdr + f"{'평균Sh':>10}")
     print("-" * 78)
     base = None
@@ -290,16 +297,18 @@ def main():
         for f in folds:
             r = res.get((f, label))
             if r:
-                cells += f"{r[0]:>+10.2f}{r[1]:>+9.1f}{r[2]:>6.1f}"; shs.append(r[0])
+                cells += f"{r[0]:>+9.2f}{r[3]:>7.1f}{r[1]:>+8.1f}{r[4]:>+9.1f}"; shs.append(r[0])
             else:
-                cells += f"{'.':>10}{'.':>9}{'.':>6}"
+                cells += f"{'.':>9}{'.':>7}{'.':>8}{'.':>9}"
         if shs:
             avg = sum(shs) / len(shs)
             if base is None:
                 base = avg
             print(f"{label:<24}{cells}{avg:>+10.2f}")
-    print("\n결합이 개별 최고를 넘어야 합칠 값이 있다. 개별 이득의 단순 합보다 작으면")
-    print("중복 계산(같은 반등 효과를 두 번 셈)이 있다는 뜻이다.")
+    print(f"\n그대로% = 예약자본 기준 연수익 / 위험고정% = 변동성을 {TARGET_VOL:.0f}% 로")
+    print("맞췄을 때의 연수익. **같은 자본·같은 위험 비교는 위험고정% 다.**")
+    print("놀리는 현금은 낭비가 아니라 변동성을 줄이는 일을 한다 — 그만큼 포지션을")
+    print("키우면 그 이득이 수익으로 돌아온다. 그래서 순위는 Sharpe 와 같아진다.")
     if args.json:
         import json as _json
         Path(args.json).write_text(_json.dumps({
