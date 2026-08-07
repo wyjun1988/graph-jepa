@@ -116,6 +116,7 @@ def main():
     ap.add_argument("--folds", nargs="+", default=["r4", "r5"])
     ap.add_argument("--seeds", nargs="+", type=int, default=[3, 5, 11, 17, 23, 29])
     ap.add_argument("--prefix", default="ens_s")
+    ap.add_argument("--json", default="", help="판정기용 결과 JSON 경로")
     args = ap.parse_args()
 
     print("가격 패널 적재 중 …", flush=True)
@@ -193,6 +194,15 @@ def main():
                 cells += f"{'.':>8}{'.':>8}{'.':>7}"
         if shs:
             print(f"{label:<18}{cells}{sum(shs)/len(shs):>+8.2f}")
+    if args.json:
+        import json as _json
+        Path(args.json).write_text(_json.dumps({
+            "study": "sl_exit", "prefix": args.prefix, "folds": folds,
+            "rows": {label: {f: res[(f, label)][0] for f in folds
+                             if (f, label) in res}
+                     for label, _, _, _ in POLICIES},
+        }, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"[json] {args.json}")
     print("\n판정: SL 이 D+15 를 넘으면 '가격기반 손절이 모델 Q1회피를 보완'.")
     print("      못 넘으면 겹치는 정보 — 단순 D+15 유지가 답이다.")
     return 0

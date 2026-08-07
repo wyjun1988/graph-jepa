@@ -543,6 +543,15 @@ class StockGraphJEPA(nn.Module):
         # 기본 0.0 이므로 미지정 시 현행과 완전히 동일하다.
         flow_rank_loss_weight: float = 0.0,
         flow_rank_features: Optional[Sequence[str]] = None,
+        # 2026-08-07: 잠재 궤적 직선화 (Temporal Straightening, ICML 2026 Wang et al.)
+        # 롤아웃 궤적 z_ctx->z_1->...->z_K 의 연속 속도벡터 간 방향 꺾임을 벌점.
+        # L = mean(1 - cos(v_k, v_{k+1})). 새 파라미터 0, 순수 보조 손실.
+        # 논문은 관측 프레임의 인코더 잠재를 직선화하지만 우리 약점은 다스텝
+        # 롤아웃(신호가 rollout_latent(steps=10)에서 나오고 hz 가 외삽에서 접힘)
+        # 이라 **예측기의 롤아웃 경로**에 건다. 잠재 예측 손실이 z_k 를 교사
+        # 타깃에 앵커하므로 직선화가 적합도와 트레이드오프된다(λ 로 조절).
+        # docs/DESIGN_STRAIGHTENING_20260807.md
+        latent_straightening_weight: float = 0.0,
         feature_means: Optional[Sequence[float]] = None,
         feature_stds: Optional[Sequence[float]] = None,
         normalize_predictor_output: bool = False,
@@ -786,6 +795,11 @@ class StockGraphJEPA(nn.Module):
         # 오타로 손실이 no-op 이 되면 "돌렸는데 아무 일도 안 났다"가 된다.
         if not math.isfinite(flow_rank_loss_weight) or flow_rank_loss_weight < 0.0:
             raise ValueError("flow_rank_loss_weight must be finite and non-negative")
+        if (not math.isfinite(latent_straightening_weight)
+                or latent_straightening_weight < 0.0):
+            raise ValueError(
+                "latent_straightening_weight must be finite and non-negative")
+        self.latent_straightening_weight = float(latent_straightening_weight)
         self.flow_rank_loss_weight = float(flow_rank_loss_weight)
         requested_flow = tuple(flow_rank_features or ())
         if self.flow_rank_loss_weight > 0.0:
@@ -1313,6 +1327,26 @@ class StockGraphJEPA(nn.Module):
                 target_batch.graph_index,
             )
         return total / float(len(self.flow_feature_indices))
+
+    def _straightening_loss(self, trajectory: Sequence[Tensor]) -> Tensor:
+        """롤아웃 궤적의 곡률 벌점. L = mean_k mean_node (1 - cos(v_k, v_{k+1})).
+
+        trajectory = [z_ctx, z_1, ..., z_K] (각각 [nodes, hidden]).
+        속도 v_k = z_{k+1} - z_k. 항이 되려면 점 3개(속도 2개)가 필요하다.
+        """
+        if self.latent_straightening_weight <= 0.0 or len(trajectory) < 3:
+            return trajectory[0].new_tensor(0.0) if trajectory else torch.tensor(0.0)
+        total = trajectory[0].new_tensor(0.0)
+        n_terms = 0
+        prev_v = None
+        for a, b in zip(trajectory[:-1], trajectory[1:]):
+            v = b - a
+            if prev_v is not None:
+                cos = F.cosine_similarity(prev_v, v, dim=-1, eps=1e-8)
+                total = total + (1.0 - cos).mean()
+                n_terms += 1
+            prev_v = v
+        return total / max(1, n_terms)
 
     def _temporal_head_input(
         self,
@@ -2297,7 +2331,16 @@ class StockGraphJEPA(nn.Module):
 
         z_context = self.encode_temporal_context(context_batch)
         z_target = self.encode_temporal_target(target_batch)
-        z_pred = self.rollout_latent(z_context, steps=rollout_steps)
+        # rollout_latent 를 수동 전개한다 — 직선화 벌점에 중간 스텝이 필요해서다.
+        # rollout_latent 와 수치가 정확히 같아야 한다(λ=0 이면 기존과 완전 동일).
+        # steps<1 검사도 그쪽과 맞춘다.
+        if int(rollout_steps) < 1:
+            raise ValueError("rollout steps must be >= 1")
+        rollout_trajectory = [z_context]
+        z_pred = z_context
+        for _ in range(int(rollout_steps)):
+            z_pred = self._predict_latent(z_pred)
+            rollout_trajectory.append(z_pred)
         state_pred = self.predict_temporal_state(
             context_batch,
             z_pred,
@@ -2399,6 +2442,7 @@ class StockGraphJEPA(nn.Module):
             target_batch,
             supervised_target_available,
         )
+        straightening_loss = self._straightening_loss(rollout_trajectory)
         downstream_auxiliary_loss = self._downstream_auxiliary_loss(
             z_context,
             z_pred,
@@ -2436,6 +2480,7 @@ class StockGraphJEPA(nn.Module):
             + self.return_correlation_loss_weight * return_corr_loss
             + self.entry_path_correlation_loss_weight * entry_path_corr_loss
             + self.flow_rank_loss_weight * flow_rank_loss
+            + self.latent_straightening_weight * straightening_loss
             + self.downstream_auxiliary_loss_weight
             * downstream_auxiliary_loss
             + self.downstream_market_loss_weight * downstream_market_loss
@@ -2455,6 +2500,8 @@ class StockGraphJEPA(nn.Module):
             "masked_mae": float(mae.detach().cpu()),
             "return_corr_loss": float(return_corr_loss.detach().cpu()),
             "entry_path_corr_loss": float(entry_path_corr_loss.detach().cpu()),
+            "flow_rank_loss": float(flow_rank_loss.detach().cpu()),
+            "straightening_loss": float(straightening_loss.detach().cpu()),
             "downstream_auxiliary_loss": float(
                 downstream_auxiliary_loss.detach().cpu()
             ),
@@ -2536,9 +2583,11 @@ class StockGraphJEPA(nn.Module):
         )
         requested_steps = {int(steps) for steps in rollout_steps}
         predicted_by_step: Dict[int, Tensor] = {}
+        rollout_trajectory = [z_context]          # 직선화용 — 모든 스텝을 모은다
         z_pred = z_context
         for step in range(1, max(requested_steps) + 1):
             z_pred = self._predict_latent(z_pred)
+            rollout_trajectory.append(z_pred)
             if step in requested_steps:
                 predicted_by_step[step] = z_pred
 
@@ -2566,6 +2615,8 @@ class StockGraphJEPA(nn.Module):
         plan_valid: Dict[int, Tensor] = {}
         losses = []
         metric_rows = []
+        straightening_rows = []
+        flow_rank_rows = []
         latent_diag_rows: list = []
         for index, (target_batch, steps, target_horizon, state_pred) in enumerate(
             zip(target_batches, rollout_steps, horizons, state_predictions)
@@ -2677,6 +2728,9 @@ class StockGraphJEPA(nn.Module):
                 target_batch,
                 supervised_target_available,
             )
+            # 궤적은 스텝별로 공유된다(같은 롤아웃) — 오프셋마다 다시 계산하지 않고
+            # 전체 경로에 한 번 건다. 가중이 0이면 상수 0이라 비용도 없다.
+            straightening_loss = self._straightening_loss(rollout_trajectory)
             downstream_auxiliary_loss = self._downstream_auxiliary_loss(
                 z_context,
                 z_pred_for_step,
@@ -2711,7 +2765,8 @@ class StockGraphJEPA(nn.Module):
                 + self.state_loss_weight * state_loss
                 + self.return_correlation_loss_weight * return_corr_loss
                 + self.entry_path_correlation_loss_weight * entry_path_corr_loss
-            + self.flow_rank_loss_weight * flow_rank_loss
+                + self.flow_rank_loss_weight * flow_rank_loss
+                + self.latent_straightening_weight * straightening_loss
                 + self.downstream_auxiliary_loss_weight
                 * downstream_auxiliary_loss
                 + self.downstream_market_loss_weight * downstream_market_loss
@@ -2719,6 +2774,8 @@ class StockGraphJEPA(nn.Module):
                 * downstream_transition_loss
             )
             losses.append(total)
+            straightening_rows.append(straightening_loss)
+            flow_rank_rows.append(flow_rank_loss)
             metric_rows.append(
                 (
                     latent_loss,
@@ -2774,6 +2831,12 @@ class StockGraphJEPA(nn.Module):
                 .sum()
                 .detach()
                 .cpu()
+            ),
+            "flow_rank_loss": float(
+                (torch.stack(flow_rank_rows) * weight_tensor).sum().detach().cpu()
+            ),
+            "straightening_loss": float(
+                (torch.stack(straightening_rows) * weight_tensor).sum().detach().cpu()
             ),
             "downstream_auxiliary_loss": float(
                 (torch.stack([row[5] for row in metric_rows]) * weight_tensor)

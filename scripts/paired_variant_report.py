@@ -119,6 +119,7 @@ def main():
     ap.add_argument("--fold", default="r5", choices=sorted(FOLDS))
     ap.add_argument("--label-a", default=None)
     ap.add_argument("--label-b", default=None)
+    ap.add_argument("--json", default="", help="판정기용 결과 JSON 경로")
     args = ap.parse_args()
     suffix = FOLDS[args.fold]
     la = args.label_a or args.a.rstrip("_s")
@@ -186,6 +187,14 @@ def main():
         print("  → %s 가 나은 방향. 다만 t=%.2f 로 %s" % (lb, t, "유의" if abs(t) > 2 else "유의 미달"))
     else:
         print("  → %s 가 나쁜 방향. 다만 t=%.2f 로 %s" % (lb, t, "유의" if abs(t) > 2 else "유의 미달"))
+    if args.json:
+        import json as _json
+        Path(args.json).write_text(_json.dumps({
+            "study": "paired_ic", "a": args.a, "b": args.b, "fold": args.fold,
+            "seeds": used, "ic_a": mea, "ic_b": meb, "diff": meb - mea,
+            "nw_t": None if tt != tt else tt,
+        }, ensure_ascii=False, indent=1), encoding="utf-8")
+        print("[json] %s" % args.json)
     print("\n단일 폴드·%d쌍 — 채택 판정은 다폴드 필요 (docs §7-5)" % n)
     return 0
 

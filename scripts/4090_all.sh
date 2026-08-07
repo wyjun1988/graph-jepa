@@ -21,12 +21,16 @@
 #      비교 대상 ens_s 가 전부 이 머신에서 학습됐으므로 머신 짝지음이 저절로 된다.
 #  S4  2차 패스 — 실패분 동시 1 재시도.
 #  S5  (옵션) Chronos r3 사전등록 검정 — chronos 미설치면 자동 생략.
-#  S6  최종 판정 재출력 — 중요한 표일수록 아래에. 로그 끝부분만 복사하면 된다.
+#  S6  최종 판정 재출력 — 중요한 표일수록 아래에 (근거용).
+#  S7  변형 자동 판정 — 사전등록 게이트를 코드로 채점. **이 블록만 복사하면 된다.**
 #
 # ── 조절 ─────────────────────────────────────────────────────────────────
 #   CONCURRENCY=1        기본 2 (24GB 에 11.8GB x2 — 이전 배치에서 검증됨)
 #   FOLDS_EXP="r5 r4"    실험 폴드 축소 (기본 5폴드 전부)
 #   CHRONOS=0            사전등록 단계 생략 (기본 auto: 설치돼 있으면 실행)
+#   FR=1 / TS=1          보조손실 변형 학습 (fr_s 수급랭킹 / ts_s 잠재직선화)
+#                        docs/DESIGN_FLOW_RANK_HEAD_20260803.md
+#                        docs/DESIGN_STRAIGHTENING_20260807.md
 #
 # 예상 소요: S1 1런 + S2 1스모크 + S3 30런.
 #   4090 실측이 런당 ~25분이면 동시2 기준 약 7시간, 45분이면 밤새.
@@ -47,6 +51,10 @@ EPC_EXTRA="--entry-path-correlation-loss-weight 0.25"
 # docs/DESIGN_FLOW_RANK_HEAD_20260803.md 의 3게이트 사전등록.
 FR="${FR:-0}"
 FR_EXTRA="--flow-rank-loss-weight ${FR_W:-0.25} --flow-rank-features investor_pension_flow_ratio_1d"
+# 2026-08-07: 잠재 직선화 실험(ts_s). TS=1 로 켠다 — 기본은 끔.
+# docs/DESIGN_STRAIGHTENING_20260807.md 의 3게이트 사전등록.
+TS="${TS:-0}"
+TS_EXTRA="--latent-straightening-weight ${TS_W:-0.1}"
 
 PY="${PY:-}"
 if [ -z "$PY" ]; then
@@ -105,8 +113,12 @@ assert "PREFIX" in q and "EXTRA" in q and "r1) FOLD=" in q
 for s in ("exit_tp_report", "sl_exit_study", "horizon_head_study",
           "paired_variant_report", "panel_report", "prereg_filter_test",
           "tsfm_benchmark", "rank_exit_study", "vol_deploy_study",
-          "vol_holding_interaction_study"):
+          "vol_holding_interaction_study", "variant_verdict"):
     assert pathlib.Path(f"scripts/{s}.py").exists(), f"{s}.py 없음 — git pull"
+# 보조손실 변형 플래그가 드라이버까지 살아 있는지 — 없으면 FR/TS 런이 통째로 튕긴다
+w = open("scripts/run_walk_forward_node_eval.py").read()
+for flag in ("--flow-rank-loss-weight", "--latent-straightening-weight"):
+    assert flag in w, f"{flag} 전달 배선 없음 — git pull"
 print("  코드 배선 OK")
 PYEOF
   for f in data/staging/ohlcv_lifecycle_hybrid_krx500_pit_20260710_v4/ohlcv \
@@ -269,6 +281,8 @@ for F in $FOLDS_EXP; do
     bash scripts/seed_queue_v2.sh "$CONCURRENCY" "$F" $SEEDS_EXP
   [ "$FR" = 1 ] && PREFIX=fr_s EXTRA="$FR_EXTRA" \
     bash scripts/seed_queue_v2.sh "$CONCURRENCY" "$F" $SEEDS_EXP
+  [ "$TS" = 1 ] && PREFIX=ts_s EXTRA="$TS_EXTRA" \
+    bash scripts/seed_queue_v2.sh "$CONCURRENCY" "$F" $SEEDS_EXP
 done
 
 # ── S4: 2차 패스 — 실패분 동시 1 ─────────────────────────────────────────
@@ -316,13 +330,20 @@ fi
 # ── S6: 최종 판정 — 중요한 표일수록 아래에 ───────────────────────────────
 echo ""
 echo "╔════ S6. 최종 판정 (전부 이 머신에서 학습 — 머신 짝지음) ════╗"
+# 이번 배치에서 실제로 학습한 변형만 판정 대상에 올린다.
+VARIANTS="epc_s"
+[ "$HZ_OK" = 1 ] && VARIANTS="hz_s $VARIANTS"
+[ "$FR" = 1 ] && VARIANTS="$VARIANTS fr_s"
+[ "$TS" = 1 ] && VARIANTS="$VARIANTS ts_s"
+VJ="$ROOT/reports/variant_verdict"; mkdir -p "$VJ"
 for F in $FOLDS_EXP; do
   echo ""
   echo "[C] h10 IC 짝비교 — 폴드 $F (회귀 금지 게이트)"
-  [ "$HZ_OK" = 1 ] && "$PY" scripts/paired_variant_report.py --a ens_s --b hz_s \
-    --seeds $SEEDS_EXP --fold "$F" 2>/dev/null | tail -6
-  "$PY" scripts/paired_variant_report.py --a ens_s --b epc_s \
-    --seeds $SEEDS_EXP --fold "$F" 2>/dev/null | tail -6
+  for V in $VARIANTS; do
+    "$PY" scripts/paired_variant_report.py --a ens_s --b "$V" \
+      --seeds $SEEDS_EXP --fold "$F" --json "$VJ/paired_${V}_${F}.json" \
+      2>/dev/null | tail -6
+  done
 done
 if [ "$HZ_OK" = 1 ]; then
   echo ""
@@ -332,21 +353,32 @@ if [ "$HZ_OK" = 1 ]; then
 fi
 echo ""
 echo "[A] 최종 자: 청산표 (D+15 SL-5% 행이 판정 기준) — 베이스라인 → 변형 순"
-for P in ens_s $([ "$HZ_OK" = 1 ] && echo hz_s) epc_s; do
+for P in ens_s $VARIANTS; do
   echo ""
   echo "  ── ${P} (시드 ${SEEDS_EXP}) ──"
   "$PY" scripts/sl_exit_study.py --prefix "$P" --seeds $SEEDS_EXP \
-    --folds $FOLDS_EXP 2>/dev/null | sed -n '/손절 연구/,$p' | head -20
+    --folds $FOLDS_EXP --json "$VJ/sl_${P}.json" \
+    2>/dev/null | sed -n '/손절 연구/,$p' | head -20
 done
 echo ""
 echo "[A2] 랭크 청산이 모델 변형에서도 유지되는가 (2026-08-02 추가)"
-for P in $([ "$HZ_OK" = 1 ] && echo hz_s) epc_s; do
+for P in ens_s $VARIANTS; do
   echo ""
   echo "  ── ${P} (시드 ${SEEDS_EXP}) ──"
   "$PY" scripts/rank_exit_study.py --prefix "$P" --seeds $SEEDS_EXP \
-    --folds $FOLDS_EXP 2>/dev/null | sed -n '/랭크 청산 연구/,$p' | head -28
+    --folds $FOLDS_EXP --json "$VJ/rank_${P}.json" \
+    2>/dev/null | sed -n '/랭크 청산 연구/,$p' | head -28
+done
+
+# ── S7: 변형 자동 판정 — 표 대신 결론 블록 ───────────────────────────────
+echo ""
+echo "╔════ S7. 변형 자동 판정 (사전등록 게이트, 이것만 복사하면 됩니다) ════╗"
+for V in $VARIANTS; do
+  echo ""
+  "$PY" scripts/variant_verdict.py --dir "$VJ" --variant "$V" \
+    --folds $FOLDS_EXP 2>&1 | tail -30
 done
 echo ""
 echo "════ 종료 $(date '+%Y-%m-%d %H:%M') ════"
-echo "복사해 주실 것: S0-c(손절), S0-e(랭크청산 사전등록), S5(필터), S6 [A]·[A2]."
-echo "그 덩어리들이면 채택 판정이 전부 됩니다."
+echo "복사해 주실 것: S0-c(손절), S0-e(랭크청산 사전등록), S5(필터), **S7 전체**."
+echo "S7 이 변형 채택 판정을 대신합니다 — [A]·[A2] 표는 근거로만 남깁니다."

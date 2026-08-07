@@ -159,6 +159,11 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.0,
     )
+    # 보조손실 변형 (2026-08-03 fr_s / 2026-08-07 ts_s).
+    # 여기 없으면 seed_queue 의 EXTRA 가 argparse 에서 통째로 튕긴다.
+    parser.add_argument("--flow-rank-loss-weight", type=float, default=0.0)
+    parser.add_argument("--flow-rank-features", default="")
+    parser.add_argument("--latent-straightening-weight", type=float, default=0.0)
     parser.add_argument(
         "--downstream-auxiliary-loss-weight",
         type=float,
@@ -371,6 +376,12 @@ def main() -> None:
             "--return-correlation-loss-weight", str(args.return_correlation_loss_weight),
             "--entry-path-correlation-loss-weight",
             str(args.entry_path_correlation_loss_weight),
+            "--flow-rank-loss-weight",
+            str(args.flow_rank_loss_weight),
+            "--flow-rank-features",
+            str(args.flow_rank_features),
+            "--latent-straightening-weight",
+            str(args.latent_straightening_weight),
             "--downstream-auxiliary-loss-weight",
             str(args.downstream_auxiliary_loss_weight),
             "--downstream-path-weight",

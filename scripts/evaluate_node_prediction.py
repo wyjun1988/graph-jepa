@@ -434,6 +434,8 @@ def load_model(model_dir: Path, device: torch.device) -> tuple[StockGraphJEPA, d
         # 손실 전용이라 파라미터를 만들진 않지만, 생성자 검증(피처 존재 여부)을
         # 통과해야 하므로 학습 때와 같은 값을 넘긴다.
         flow_rank_loss_weight=float(ckpt_args.get("flow_rank_loss_weight", 0.0)),
+        latent_straightening_weight=float(
+            ckpt_args.get("latent_straightening_weight", 0.0)),
         flow_rank_features=ckpt_args.get("flow_rank_features_list")
         or ckpt_args.get("flow_rank_features"),
         feature_means=ckpt.get("train_mean"),

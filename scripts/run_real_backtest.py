@@ -1470,6 +1470,8 @@ def parse_args() -> argparse.Namespace:
     # docs/DESIGN_FLOW_RANK_HEAD_20260803.md
     parser.add_argument("--flow-rank-loss-weight", type=float, default=0.0,
                         help="지정 피처의 횡단면 순위를 직접 맞추는 보조 손실 가중")
+    parser.add_argument("--latent-straightening-weight", type=float, default=0.0,
+                        help="잠재 롤아웃 궤적의 곡률 벌점(Temporal Straightening). 기본 0=현행")
     parser.add_argument("--flow-rank-features",
                         default="investor_pension_flow_ratio_1d",
                         help="쉼표 구분. --flow-rank-loss-weight > 0 일 때만 쓰인다")
@@ -2072,6 +2074,7 @@ def main() -> None:
         ),
         flow_rank_loss_weight=args.flow_rank_loss_weight,
         flow_rank_features=args.flow_rank_features_list,
+        latent_straightening_weight=args.latent_straightening_weight,
         feature_means=features.train_mean,
         feature_stds=features.train_std,
         normalize_predictor_output=args.normalize_predictor_output,
